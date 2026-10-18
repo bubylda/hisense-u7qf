@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+.env
+.env.*
+*.log
+credentials.json
+research-output/
+*.pem
+*.key
+*.cer
+*.pkcs8
+!custom_components/hisense_u7qf/public_app_certs/*.cer
+!custom_components/hisense_u7qf/public_app_certs/*.pkcs8

@@ -1,0 +1,116 @@
+send_key:
+  name: Send Key
+  description: Send a remote control key command to the TV.
+  target:
+    entity:
+      integration: hisense_u7qf
+      domain:
+        - media_player
+        - remote
+  fields:
+    key:
+      name: Key
+      description: The remote key code or alias to send (e.g. KEY_POWER, KEY_VOLUMEUP, home, menu, ok, back).
+      required: true
+      example: KEY_HOME
+      selector:
+        text:
+    repeat:
+      name: Repeat
+      description: Number of times to repeat the key press.
+      required: false
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+    delay:
+      name: Delay
+      description: Delay in seconds between repeated key presses.
+      required: false
+      default: 0.2
+      selector:
+        number:
+          min: 0.05
+          max: 2.0
+          step: 0.05
+          unit_of_measurement: seconds
+          mode: slider
+
+launch_app:
+  name: Launch App
+  description: Launch a smart TV application on the TV.
+  target:
+    entity:
+      integration: hisense_u7qf
+      domain:
+        - media_player
+  fields:
+    app:
+      name: App
+      description: Name of an application reported by the TV; optional when app_id is supplied.
+      required: false
+      example: YouTube
+      selector:
+        text:
+    app_id:
+      name: App ID
+      description: TV application ID to launch. If omitted, the ID is looked up from the app list.
+      required: false
+      example: "3"
+      selector:
+        text:
+    app_name:
+      name: App Name
+      description: Application name to include in the launch request.
+      required: false
+      example: YouTube
+      selector:
+        text:
+    url:
+      name: URL
+      description: Reported URL from the TV app list; custom URLs and deep links are not supported.
+      required: false
+      example: https://youtu.be/dQw4w9WgXcQ?si=dflf0w3Fuwu2rnI2
+      selector:
+        text:
+
+set_picture_setting:
+  name: Set Picture Setting
+  description: Change an approved U7QF user picture control; calibration and service fields are rejected.
+  target:
+    entity:
+      integration: hisense_u7qf
+      domain:
+        - media_player
+        - select
+        - number
+  fields:
+    menu_id:
+      name: Menu ID
+      description: Use the actual ID from the picture settings catalog. IDs vary by firmware; on the observed U4 menu brightness is 3, backlight 8 and MEMC 23.
+      required: true
+      example: 3
+      selector:
+        number:
+          min: 1
+          max: 999
+          mode: box
+    menu_value:
+      name: Menu Value
+      description: The new setting value or preset name (e.g. "Cinema Day", 80, 50).
+      required: true
+      example: "Cinema Day"
+      selector:
+        text:
+
+get_remote_card:
+  name: Generate TV remote card
+  description: Return a native Lovelace remote layout using this TV's real entity IDs. Copy the card object from the response into a Manual dashboard card.
+  target:
+    entity:
+      integration: hisense_u7qf
+      domain:
+        - media_player
+        - remote

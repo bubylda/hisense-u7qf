@@ -1,0 +1,184 @@
+"""Remote platform for Hisense VIDAA TV integration."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
+
+from homeassistant.components.remote import RemoteEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .client import HisenseTvClient
+from .const import (
+    CONF_ENABLE_REMOTE,
+    CONF_ENABLE_WOL,
+    CONF_KEY_DELAY,
+    CONF_KEY_REPEAT,
+    CONF_SECONDARY_MAC_ADDRESS,
+    DEFAULT_ENABLE_REMOTE,
+    DEFAULT_ENABLE_WOL,
+    DEFAULT_KEY_DELAY,
+    DEFAULT_KEY_REPEAT,
+    DOMAIN,
+)
+from .entity import HisenseVidaaEntity
+from .remote_layout import REMOTE_COMMANDS
+from .tv.state import apply_state_update
+
+if TYPE_CHECKING:
+    from . import HisenseVidaaConfigEntry
+
+_LOGGER = logging.getLogger(__name__)
+
+PARALLEL_UPDATES = 0
+
+# Home Assistant's remote.send_command schema *always* supplies num_repeats
+# (default 1), so a plain kwargs.get() would permanently shadow the key_repeat
+# option. Treat the service default as "caller left it unset".
+SERVICE_DEFAULT_NUM_REPEATS = 1
+
+
+class HisenseVidaaRemote(HisenseVidaaEntity, RemoteEntity):
+    """Hisense VIDAA Remote entity."""
+
+    _attr_translation_key = "remote"
+
+    def __init__(
+        self,
+        client: HisenseTvClient,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(client=client, entry=entry)
+        self._attr_unique_id = f"{self._entry_id}_remote"
+
+    async def async_added_to_hass(self) -> None:
+        """Register callbacks and query initial state when entity is added to hass."""
+        self._client.register_connected_callback(self._handle_connected)
+        self._client.register_state_callback(self._handle_state_update)
+        self._client.register_volume_callback(self._handle_update)
+        self._client.register_sourcelist_callback(self._handle_update)
+        self._client.register_applist_callback(self._handle_update)
+        self._client.register_disconnected_callback(self._handle_disconnected)
+
+        # Sync state immediately if client is already connected
+        if getattr(self._client, "connected", False):
+            self._is_on = bool(self._client.is_on)
+            self._current_app = self._client.current_app
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister callbacks when entity is removed."""
+        self._client.unregister_connected_callback(self._handle_connected)
+        self._client.unregister_state_callback(self._handle_state_update)
+        self._client.unregister_volume_callback(self._handle_update)
+        self._client.unregister_sourcelist_callback(self._handle_update)
+        self._client.unregister_applist_callback(self._handle_update)
+        self._client.unregister_disconnected_callback(self._handle_disconnected)
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID."""
+        return self._attr_unique_id
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return observed power state, preserving unknown after disconnect."""
+        if getattr(self._client, "state", "unknown") == "unknown":
+            return None
+        return bool(self._client and self._client.is_on)
+
+    @property
+    def available(self) -> bool:
+        """Return true if remote is available."""
+        return bool(self._entry_id and (self._client.access_token or self._mac))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"supported_commands": list(REMOTE_COMMANDS)}
+
+    async def _async_exec(self, func: Any, *args: Any) -> Any:
+        """Execute a client function in the executor if hass is present, or directly if testing."""
+        if getattr(self, "hass", None) is not None:
+            return await self.hass.async_add_executor_job(func, *args)
+        return func(*args)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the TV on."""
+        mac_targets = []
+        if self._options.get(CONF_ENABLE_WOL, DEFAULT_ENABLE_WOL):
+            if self._mac:
+                mac_targets.append(self._mac)
+            sec_mac = self._options.get(CONF_SECONDARY_MAC_ADDRESS)
+            if sec_mac and sec_mac not in mac_targets:
+                mac_targets.append(sec_mac)
+
+        await self._async_exec(self._client.turn_on, mac_targets if mac_targets else None)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the TV off."""
+        await self._async_exec(self._client.turn_off)
+        self.async_write_ha_state()
+
+    async def async_send_command(self, command: Iterable[str], **kwargs: Any) -> None:
+        """Send a list of commands to the TV."""
+        default_delay = self._options.get(CONF_KEY_DELAY, DEFAULT_KEY_DELAY)
+        default_repeats = self._options.get(CONF_KEY_REPEAT, DEFAULT_KEY_REPEAT)
+        num_repeats = kwargs.get("num_repeats", default_repeats)
+        if num_repeats == SERVICE_DEFAULT_NUM_REPEATS:
+            # HA always sends the service default; fall back to the key_repeat option.
+            num_repeats = default_repeats
+        delay_secs = kwargs.get("delay_secs", default_delay)
+        hold_secs = kwargs.get("hold_secs", 0.0)
+
+        if hold_secs and hold_secs > 0:
+            raise HomeAssistantError("U7QF supports single key presses; use num_repeats instead of hold_secs")
+        if isinstance(command, str):
+            command = [command]
+
+        try:
+            for _ in range(num_repeats):
+                for single_cmd in command:
+                    await self._async_exec(self._client.send_command, single_cmd)
+                    if delay_secs > 0:
+                        await asyncio.sleep(delay_secs)
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+
+    def _handle_update(self, *args: Any) -> None:
+        """Handle state update from TV."""
+        self.schedule_update_ha_state()
+
+    def _handle_connected(self, *args: Any) -> None:
+        self._handle_update()
+
+    def _handle_disconnected(self, *args: Any) -> None:
+        self._handle_update()
+
+    def _handle_state_update(self, data: dict[str, Any]) -> None:
+        apply_state_update(self._client, data)
+        self.schedule_update_ha_state()
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: HisenseVidaaConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the Hisense VIDAA remote entity."""
+    client: HisenseTvClient = config_entry.runtime_data.client
+
+    # Clean up the remote from the entity registry if the feature was disabled
+    entity_reg = er.async_get(hass)
+    unique_id = f"{config_entry.entry_id}_remote"
+    if not config_entry.options.get(CONF_ENABLE_REMOTE, DEFAULT_ENABLE_REMOTE):
+        if entity_id := entity_reg.async_get_entity_id("remote", DOMAIN, unique_id):
+            entity_reg.async_remove(entity_id)
+        return
+
+    async_add_entities([HisenseVidaaRemote(client=client, entry=config_entry)])

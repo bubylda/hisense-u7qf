@@ -1,0 +1,317 @@
+"""Operational and metadata sensors for Hisense VIDAA TV."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .client import HisenseTvClient
+from .sensors_diagnostic import (
+    HisenseVidaaAudioOutputSensor,
+    HisenseVidaaAuthProfileSensor,
+    HisenseVidaaBaseSensor,
+    HisenseVidaaReportedNameSensor,
+    HisenseVidaaSessionStatusSensor,
+)
+from .tv.media import parse_applist_payload, parse_sourcelist_payload
+from .tv.navigation import get_app_icon, get_source_icon
+
+if TYPE_CHECKING:
+    from . import HisenseVidaaConfigEntry
+
+_LOGGER = logging.getLogger(__name__)
+
+PARALLEL_UPDATES = 0
+
+__all__ = [
+    "HisenseVidaaActiveAppSensor",
+    "HisenseVidaaActiveSourceSensor",
+    "HisenseVidaaAudioOutputSensor",
+    "HisenseVidaaAuthProfileSensor",
+    "HisenseVidaaBaseSensor",
+    "HisenseVidaaMqttTrackingSensor",
+    "HisenseVidaaReportedNameSensor",
+    "HisenseVidaaSessionStatusSensor",
+    "async_setup_entry",
+]
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: HisenseVidaaConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Hisense VIDAA sensors based on a config entry."""
+    client: HisenseTvClient = entry.runtime_data.client
+    async_add_entities(
+        [
+            HisenseVidaaSessionStatusSensor(client, entry),
+            HisenseVidaaAuthProfileSensor(client, entry),
+            HisenseVidaaReportedNameSensor(client, entry),
+            HisenseU7QFIdentitySensor(client, entry, "model"),
+            HisenseU7QFIdentitySensor(client, entry, "firmware"),
+            HisenseVidaaActiveAppSensor(client, entry),
+            HisenseVidaaActiveSourceSensor(client, entry),
+            HisenseVidaaAudioOutputSensor(client, entry),
+            HisenseVidaaPictureCatalogSensor(client, entry),
+        ]
+    )
+
+
+class HisenseVidaaMqttTrackingSensor(HisenseVidaaBaseSensor):
+    """Base class for sensors tracking live MQTT state and connection events."""
+
+    def __init__(self, client: HisenseTvClient, entry: ConfigEntry, default_on: str, default_off: str = "Off") -> None:
+        super().__init__(client, entry)
+        self._default_on = default_on
+        self._default_off = default_off
+        self._attr_native_value = default_off if not client.connected else default_on
+
+    async def async_added_to_hass(self) -> None:
+        self._client.register_connected_callback(self._handle_connected)
+        self._client.register_state_callback(self._handle_state_update)
+        self._client.register_disconnected_callback(self._handle_disconnected)
+        self._register_custom_callbacks()
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._client.unregister_connected_callback(self._handle_connected)
+        self._client.unregister_state_callback(self._handle_state_update)
+        self._client.unregister_disconnected_callback(self._handle_disconnected)
+        self._unregister_custom_callbacks()
+
+    def _register_custom_callbacks(self) -> None:
+        pass
+
+    def _unregister_custom_callbacks(self) -> None:
+        pass
+
+    def _handle_connected(self) -> None:
+        if self._attr_native_value == self._default_off:
+            self._attr_native_value = self._default_on
+        self._schedule_state_update()
+
+    def _handle_disconnected(self) -> None:
+        self._attr_native_value = self._default_off
+        self._schedule_state_update()
+
+    def _handle_state_update(self, state: dict[str, Any]) -> None:
+        raise NotImplementedError
+
+
+class HisenseVidaaActiveAppSensor(HisenseVidaaMqttTrackingSensor):
+    """Sensor reporting the foreground active application."""
+
+    _attr_translation_key = "active_app"
+    _attr_icon = "mdi:application"
+
+    def __init__(self, client: HisenseTvClient, entry: ConfigEntry) -> None:
+        super().__init__(client, entry, default_on="Standby", default_off="Off")
+        self._attr_unique_id = f"{self._entry_id}_active_app"
+        self._app_dict: dict[str, str] = {}
+        self._app_icons: dict[str, str] = {}
+        self._favorite_apps: list[str] = []
+
+    def _register_custom_callbacks(self) -> None:
+        self._client.register_applist_callback(self._handle_applist_update)
+
+    def _unregister_custom_callbacks(self) -> None:
+        self._client.unregister_applist_callback(self._handle_applist_update)
+
+    def _handle_applist_update(self, apps: list[dict[str, Any]]) -> None:
+        if apps:
+            self._app_dict, self._app_icons, self._favorite_apps = parse_applist_payload(apps)
+            self._schedule_state_update()
+
+    def _handle_state_update(self, state: dict[str, Any]) -> None:
+        if not isinstance(state, dict):
+            return
+        statetype = state.get("statetype")
+        if statetype == "fake_sleep_0" or not self._client.connected:
+            self._attr_native_value = "Off"
+        elif statetype == "app":
+            name = state.get("name") or state.get("appName")
+            app_id = str(state.get("appId") or state.get("activeAppId") or "")
+            self._attr_native_value = name or self._app_dict.get(app_id, "App")
+        elif statetype == "livetv":
+            self._attr_native_value = "Live TV"
+        elif statetype == "sourceswitch":
+            self._attr_native_value = "TV Input"
+        elif statetype == "launcher":
+            self._attr_native_value = "Home Launcher"
+        else:
+            app_id = str(state.get("appId") or state.get("activeAppId") or "")
+            if app_id:
+                self._attr_native_value = self._app_dict.get(app_id, app_id)
+        self._schedule_state_update()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return sensor attributes."""
+        attrs: dict[str, Any] = {"total_installed_apps": len(self._app_dict)}
+        if self._favorite_apps:
+            attrs["favorite_apps"] = self._favorite_apps
+        if self._attr_native_value and self._attr_native_value in self._app_icons:
+            attrs["icon_url"] = self._app_icons[self._attr_native_value]
+        return attrs
+
+    @property
+    def entity_picture(self) -> str | None:
+        """Return dynamic app icon artwork."""
+        return self._app_icons.get(self._attr_native_value) if self._attr_native_value else None
+
+    @property
+    def icon(self) -> str:
+        """Return dynamic MDI icon for the active app or state."""
+        return get_app_icon(self._attr_native_value)
+
+
+class HisenseVidaaActiveSourceSensor(HisenseVidaaMqttTrackingSensor):
+    """Sensor reporting current physical input source."""
+
+    _attr_translation_key = "active_source"
+    _attr_icon = "mdi:video-input-hdmi"
+
+    def __init__(self, client: HisenseTvClient, entry: ConfigEntry) -> None:
+        super().__init__(client, entry, default_on="None", default_off="Off")
+        self._attr_unique_id = f"{self._entry_id}_active_source"
+        self._available_sources: list[str] = []
+        self._connected_inputs: list[str] = []
+        self._custom_labels: dict[str, str] = {}
+        self._connected_device: str | None = None
+        self._channel_name: str | None = None
+        self._channel_num: str | None = None
+
+    def _register_custom_callbacks(self) -> None:
+        self._client.register_sourcelist_callback(self._handle_sourcelist_update)
+
+    def _unregister_custom_callbacks(self) -> None:
+        self._client.unregister_sourcelist_callback(self._handle_sourcelist_update)
+
+    def _handle_state_update(self, state: dict[str, Any]) -> None:
+        statetype = state.get("statetype")
+        if statetype == "fake_sleep_0" or not self._client.connected:
+            self._attr_native_value = "Off"
+            self._connected_device = self._channel_name = self._channel_num = None
+        elif statetype == "sourceswitch":
+            self._attr_native_value = (
+                state.get("sourcename") or state.get("sourceName") or state.get("displayname") or "HDMI"
+            )
+            self._connected_device = state.get("displayname2") or state.get("source_detail")
+            self._channel_name = self._channel_num = None
+        elif statetype == "livetv":
+            self._attr_native_value = "TV"
+            self._connected_device = None
+            self._channel_name = state.get("channel_name")
+            self._channel_num = state.get("channel_num")
+        elif statetype in ("app", "launcher"):
+            self._attr_native_value = "None"
+            self._connected_device = self._channel_name = self._channel_num = None
+        elif state.get("sourcename") or state.get("sourceName"):
+            self._attr_native_value = state.get("sourcename") or state.get("sourceName")
+            self._connected_device = state.get("displayname2") or state.get("source_detail")
+        self._schedule_state_update()
+
+    def _handle_sourcelist_update(self, sources: list[dict[str, Any]]) -> None:
+        if sources:
+            self._available_sources, self._connected_inputs, self._custom_labels, active_src = parse_sourcelist_payload(
+                sources
+            )
+            if active_src:
+                self._attr_native_value = active_src
+            self._schedule_state_update()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return sensor attributes."""
+        attrs: dict[str, Any] = {}
+        for key, val in (
+            ("available_sources", self._available_sources),
+            ("connected_inputs", self._connected_inputs),
+            ("custom_labels", self._custom_labels),
+            ("connected_device", self._connected_device),
+            ("channel_name", self._channel_name),
+            ("channel_num", self._channel_num),
+        ):
+            if val:
+                attrs[key] = val
+        return attrs
+
+    @property
+    def icon(self) -> str:
+        """Return dynamic MDI icon based on active input source."""
+        return get_source_icon(self._attr_native_value)
+
+
+class HisenseVidaaPictureCatalogSensor(HisenseVidaaBaseSensor):
+    """Count and inspect the firmware-reported picture menu, including metadata."""
+
+    _attr_translation_key = "picture_catalog"
+    _attr_icon = "mdi:tune-vertical"
+
+    def __init__(self, client: HisenseTvClient, entry: ConfigEntry) -> None:
+        super().__init__(client, entry)
+        self._attr_unique_id = f"{self._entry_id}_picture_catalog"
+
+    @property
+    def native_value(self) -> int:
+        return len(self._client.picture_settings)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        from .picture_context import picture_context
+
+        return {
+            "picture_context": picture_context(self._client),
+            "version": getattr(self._client, "picture_settings_version", None),
+            "items": {
+                str(menu_id): {
+                    "name": item.name,
+                    "value": item.value,
+                    "type": item.raw_data.get("menu_value_type"),
+                    "business_id": item.raw_data.get("menu_biz_id"),
+                }
+                for menu_id, item in self._client.picture_settings.items()
+            },
+        }
+
+    async def async_added_to_hass(self) -> None:
+        self._client.register_picture_callback(self._handle_picture)
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._client.unregister_picture_callback(self._handle_picture)
+
+    def _handle_picture(self, data: Any) -> None:
+        self.schedule_update_ha_state()
+
+
+class HisenseU7QFIdentitySensor(HisenseVidaaBaseSensor):
+    """Model and firmware reported by the TV, visible under diagnostics."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, client, entry, field):
+        super().__init__(client, entry)
+        self._field = field
+        self._attr_unique_id = f"{self._entry_id}_{field}"
+        self._attr_translation_key = field
+        self._attr_icon = "mdi:television" if field == "model" else "mdi:chip"
+
+    @property
+    def native_value(self):
+        if self._field == "model":
+            return self._client.model_name or self._model
+        return self._client.firmware_version or self._sw_version
+
+    async def async_added_to_hass(self):
+        self._client.register_device_info_callback(self._handle_info)
+
+    async def async_will_remove_from_hass(self):
+        self._client.unregister_device_info_callback(self._handle_info)
+
+    def _handle_info(self, *args):
+        self.schedule_update_ha_state()

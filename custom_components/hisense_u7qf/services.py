@@ -1,0 +1,470 @@
+"""Custom services registration and handlers for Hisense VIDAA TV."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+from typing import Any
+
+import voluptuous as vol
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import ServiceValidationError
+
+from .const import (
+    ATTR_APP,
+    ATTR_APP_ID,
+    ATTR_APP_NAME,
+    ATTR_DELAY,
+    ATTR_KEY,
+    ATTR_MENU_ID,
+    ATTR_MENU_VALUE,
+    ATTR_REPEAT,
+    ATTR_URL,
+    DOMAIN,
+    SERVICE_LAUNCH_APP,
+    SERVICE_SEND_KEY,
+    SERVICE_SEND_TEXT_INPUT,
+    SERVICE_SET_PICTURE_SETTING,
+    SERVICE_SET_SOUND_SETTING,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+__all__ = ["async_setup_services", "async_unload_services"]
+
+
+def _as_id_set(value: Any) -> set[str]:
+    """Normalize a target selector value (single id or list of ids) into a set."""
+    if not value:
+        return set()
+    if isinstance(value, str):
+        return {value}
+    return {str(item) for item in value}
+
+
+def _async_target_entry_ids_from_registries(hass: HomeAssistant, call_data: dict[str, Any]) -> set[str]:
+    """Resolve area/floor/label targets to config entry ids via the HA registries.
+
+    the target selector also offers area, floor and label targeting;
+    those live in their own keys of the service call data and were previously
+    ignored, so such a call was broadcast to every TV instead.
+    """
+    area_ids = _as_id_set(call_data.get("area_id"))
+    floor_ids = _as_id_set(call_data.get("floor_id"))
+    label_ids = _as_id_set(call_data.get("label_id"))
+    if not area_ids and not floor_ids and not label_ids:
+        return set()
+
+    from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
+
+    if floor_ids:
+        for area in ar.async_get(hass).areas.values():
+            if area.floor_id in floor_ids:
+                area_ids.add(area.id)
+
+    entry_ids: set[str] = set()
+
+    ent_reg = er.async_get(hass)
+    for entity in ent_reg.entities.values():
+        labels = getattr(entity, "labels", None) or ()
+        if (
+            (entity.area_id and entity.area_id in area_ids) or (label_ids and label_ids.intersection(labels))
+        ) and entity.config_entry_id:
+            entry_ids.add(entity.config_entry_id)
+
+    dev_reg = dr.async_get(hass)
+    for device in dev_reg.devices.values():
+        labels = getattr(device, "labels", None) or ()
+        if (device.area_id and device.area_id in area_ids) or (label_ids and label_ids.intersection(labels)):
+            entry_ids.update(device.config_entries)
+
+    return entry_ids
+
+
+def _get_target_clients(hass: HomeAssistant, call: ServiceCall) -> list[Any]:
+    """Resolve target clients from service call parameters."""
+    clients: list[Any] = []
+    loaded_entries: list[Any] = []
+    if hasattr(hass, "config_entries") and hasattr(hass.config_entries, "async_loaded_entries"):
+        with contextlib.suppress(Exception):
+            res = hass.config_entries.async_loaded_entries(DOMAIN)
+            if isinstance(res, list):
+                loaded_entries = res
+
+    if not loaded_entries and hasattr(hass, "config_entries") and hasattr(hass.config_entries, "async_entries"):
+        with contextlib.suppress(Exception):
+            res = hass.config_entries.async_entries(DOMAIN)
+            if isinstance(res, list):
+                loaded_entries = [e for e in res if getattr(e, "runtime_data", None) is not None]
+
+    if not loaded_entries and hasattr(hass, "data") and isinstance(hass.data, dict) and DOMAIN in hass.data:
+        from types import SimpleNamespace
+
+        for eid, edata in hass.data.get(DOMAIN, {}).items():
+            loaded_entries.append(SimpleNamespace(entry_id=eid, runtime_data=edata))
+
+    target_ip = call.data.get("ip_address") or call.data.get("ip")
+    target_mac = call.data.get("mac_address") or call.data.get("mac")
+    target_entry_id = call.data.get("entry_id")
+
+    target_entry_ids: set[str] = set()
+    if target_entry_id:
+        target_entry_ids.add(target_entry_id)
+
+    target_entry_ids |= _async_target_entry_ids_from_registries(hass, call.data)
+
+    entity_ids = call.data.get("entity_id")
+    registry_ids_given = bool(
+        entity_ids
+        or call.data.get("device_id")
+        or call.data.get("area_id")
+        or call.data.get("floor_id")
+        or call.data.get("label_id")
+    )
+    if entity_ids:
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        try:
+            from homeassistant.helpers import entity_registry as er
+
+            ent_reg = er.async_get(hass)
+            for eid in entity_ids:
+                entry = ent_reg.async_get(eid)
+                if entry and entry.config_entry_id:
+                    target_entry_ids.add(entry.config_entry_id)
+        except Exception:
+            pass
+
+    device_ids = call.data.get("device_id")
+    if device_ids:
+        if isinstance(device_ids, str):
+            device_ids = [device_ids]
+        try:
+            from homeassistant.helpers import device_registry as dr
+
+            dev_reg = dr.async_get(hass)
+            for did in device_ids:
+                device = dev_reg.async_get(did)
+                if device:
+                    for ce_id in device.config_entries:
+                        target_entry_ids.add(ce_id)
+        except Exception:
+            pass
+
+    # ip/mac/entry_id are explicit targets too, so the broadcast
+    # fallback below must never fire once anything targets the call.
+    selector_given = bool(target_entry_ids or target_ip or target_mac or registry_ids_given)
+
+    for entry in loaded_entries:
+        runtime_data = getattr(entry, "runtime_data", None)
+        if isinstance(runtime_data, dict):
+            client = runtime_data.get("client")
+        elif runtime_data is not None:
+            client = getattr(runtime_data, "client", runtime_data)
+        else:
+            client = None
+        if not client:
+            continue
+        if target_entry_ids and entry.entry_id not in target_entry_ids:
+            continue
+        # A registry-backed target (entity/device/area/floor/label) that resolves
+        # to no entry matches nothing - it must not degrade into a broadcast.
+        if registry_ids_given and not target_entry_ids:
+            continue
+        if target_ip and getattr(client, "ip", None) != target_ip:
+            continue
+        if target_mac and getattr(client, "mac", None) != target_mac:
+            continue
+        clients.append(client)
+
+    if not clients and not selector_given:
+        for entry in loaded_entries:
+            runtime_data = getattr(entry, "runtime_data", None)
+            if isinstance(runtime_data, dict):
+                client = runtime_data.get("client")
+            elif runtime_data is not None:
+                client = getattr(runtime_data, "client", runtime_data)
+            else:
+                client = None
+            if client:
+                clients.append(client)
+    return clients
+
+
+def _resolve_service_targets(hass: HomeAssistant, call: ServiceCall) -> list[Any]:
+    """Resolve the clients addressed by a service call, or fail loudly.
+
+    a targeted call that matched nothing used to return `count: 0`
+    silently, and a call against a disconnected TV silently did nothing.  Both
+    now surface the pre-defined translation keys as ServiceValidationError.
+    """
+    clients = _get_target_clients(hass, call)
+    if not clients:
+        raise ServiceValidationError(
+            "No matching Hisense VIDAA TV was found for the specified service call target.",
+            translation_domain=DOMAIN,
+            translation_key="no_target_device",
+        )
+    if not any(getattr(client, "connected", False) for client in clients):
+        raise ServiceValidationError(
+            "Cannot send command: TV is currently disconnected.",
+            translation_domain=DOMAIN,
+            translation_key="not_connected",
+        )
+    return clients
+
+
+def _validate_launch_app_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Require an app name/URL or an application ID for launch_app."""
+    if not data.get(ATTR_APP) and not data.get(ATTR_APP_ID):
+        raise vol.Invalid("Provide either 'app' or 'app_id'.")
+    return data
+
+
+def _target_selector_fields() -> dict[Any, Any]:
+    """Return the target-selector fields accepted by every service schema."""
+    return {
+        vol.Optional("entry_id"): str,
+        vol.Optional("entity_id"): vol.Any(str, [str]),
+        vol.Optional("device_id"): vol.Any(str, [str]),
+        vol.Optional("area_id"): vol.Any(str, [str]),
+        vol.Optional("floor_id"): vol.Any(str, [str]),
+        vol.Optional("label_id"): vol.Any(str, [str]),
+        vol.Optional("ip_address"): str,
+        vol.Optional("ip"): str,
+        vol.Optional("mac_address"): str,
+        vol.Optional("mac"): str,
+    }
+
+
+async def async_setup_services(hass: HomeAssistant) -> None:
+    """Register all custom services for the Hisense VIDAA TV integration."""
+
+    async def handle_send_key(call: ServiceCall) -> dict[str, Any]:
+        """Handle send_key service call."""
+        key = call.data.get(ATTR_KEY)
+        repeat = call.data.get(ATTR_REPEAT, 1)
+        delay = call.data.get(ATTR_DELAY, 0.2)
+        target_clients = _resolve_service_targets(hass, call)
+
+        for client in target_clients:
+            for i in range(repeat):
+                if i > 0 and delay > 0:
+                    await asyncio.sleep(delay)
+                await hass.async_add_executor_job(client.send_command, key)
+
+        return {
+            "key": key,
+            "repeat": repeat,
+            "targets": [getattr(c, "ip", "unknown") for c in target_clients],
+            "count": len(target_clients),
+        }
+
+    async def handle_launch_app(call: ServiceCall) -> dict[str, Any]:
+        """Handle launch_app service call."""
+        app = str(call.data.get(ATTR_APP) or "")
+        requested_app_id = str(call.data.get(ATTR_APP_ID) or "")
+        target_clients = _resolve_service_targets(hass, call)
+        launched: list[dict[str, Any]] = []
+        lookup_ids = {value.lower() for value in (app, requested_app_id) if value}
+
+        for client in target_clients:
+            matched_app = None
+            for a in getattr(client, "apps", []):
+                if isinstance(a, dict) and (
+                    (app and str(a.get("name") or a.get("appName") or "").lower() == app.lower())
+                    or str(a.get("appId") or a.get("app_id") or "").lower() in lookup_ids
+                ):
+                    matched_app = a
+                    break
+
+            if matched_app:
+                app_id = str(matched_app.get("appId") or matched_app.get("app_id") or "")
+                app_name = str(matched_app.get("name") or matched_app.get("appName") or "")
+                app_url = str(matched_app.get("url") or matched_app.get("appUrl") or "")
+            else:
+                app_id = ""
+                app_name = app or requested_app_id
+                app_url = app
+
+            app_id = requested_app_id or app_id
+            app_name = str(call.data.get(ATTR_APP_NAME, app_name))
+            app_url = str(call.data.get(ATTR_URL, app_url))
+
+            await hass.async_add_executor_job(
+                client.launch_app,
+                app_id,
+                app_name,
+                app_url,
+            )
+            launched.append(
+                {
+                    "ip": getattr(client, "ip", "unknown"),
+                    "app_name": app_name,
+                    "app_id": app_id,
+                    "app_url": app_url,
+                }
+            )
+
+        return {
+            "app": app or requested_app_id,
+            "targets": launched,
+            "count": len(launched),
+        }
+
+    async def handle_set_picture_setting(call: ServiceCall) -> dict[str, Any]:
+        """Handle set_picture_setting service call."""
+        menu_id = call.data.get(ATTR_MENU_ID)
+        menu_val = call.data.get(ATTR_MENU_VALUE)
+        target_clients = _resolve_service_targets(hass, call)
+        for client in target_clients:
+            if getattr(client, "picture_settings_version", None) == "U4":
+                from .picture_context import guarded_picture_command, picture_context
+
+                expected = (picture_context(client), client._picture_generation)
+                await hass.async_add_executor_job(
+                    guarded_picture_command, client, expected, client.set_picture_setting, menu_id, menu_val
+                )
+                await hass.async_add_executor_job(client.get_picture_settings)
+            else:
+                await hass.async_add_executor_job(client.set_picture_setting, menu_id, menu_val)
+        return {
+            "menu_id": menu_id,
+            "menu_value": menu_val,
+            "targets": [getattr(c, "ip", "unknown") for c in target_clients],
+            "count": len(target_clients),
+        }
+
+    async def handle_get_remote_card(call: ServiceCall) -> dict[str, Any]:
+        from homeassistant.helpers import entity_registry as er
+
+        from .remote_layout import build_remote_card
+
+        clients = _resolve_service_targets(hass, call)
+        if len(clients) != 1:
+            raise ServiceValidationError("Select exactly one Hisense U7QF television")
+        entries = [
+            entry
+            for entry in hass.config_entries.async_loaded_entries(DOMAIN)
+            if entry.runtime_data.client is clients[0]
+        ]
+        if len(entries) != 1:
+            raise ServiceValidationError("Television entry is not loaded")
+        entry = entries[0]
+        mapping = {}
+        for entity in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id):
+            if entity.disabled_by:
+                continue
+            if entity.domain == "media_player":
+                mapping["media_player"] = entity.entity_id
+            for suffix in (
+                "remote",
+                "input",
+                "picture_mode",
+                "backlight",
+                "motion_smoothing",
+                "local_dimming",
+                "game_mode",
+                "screen_off",
+                "screen_on",
+                "audio_only_mode",
+            ):
+                if entity.unique_id == f"{entry.entry_id}_{suffix}":
+                    mapping[suffix] = entity.entity_id
+        if "remote" not in mapping:
+            raise ServiceValidationError("Remote entity is not registered")
+        return {"card": build_remote_card(mapping), "entity_ids": mapping}
+
+    # without a schema a bad `repeat`/`delay` reached the handler and
+    # raised a raw TypeError, and the strings.json `exceptions` keys were dead.
+    services_map = [
+        ("get_remote_card", handle_get_remote_card, vol.Schema(_target_selector_fields())),
+        (
+            SERVICE_SEND_KEY,
+            handle_send_key,
+            vol.Schema(
+                {
+                    **_target_selector_fields(),
+                    vol.Required(ATTR_KEY): str,
+                    vol.Optional(ATTR_REPEAT, default=1): vol.Coerce(int),
+                    vol.Optional(ATTR_DELAY, default=0.2): vol.Coerce(float),
+                }
+            ),
+        ),
+        (
+            SERVICE_LAUNCH_APP,
+            handle_launch_app,
+            vol.Schema(
+                vol.All(
+                    {
+                        **_target_selector_fields(),
+                        vol.Optional(ATTR_APP): str,
+                        vol.Optional(ATTR_APP_ID): vol.Coerce(str),
+                        vol.Optional(ATTR_APP_NAME): str,
+                        vol.Optional(ATTR_URL): str,
+                    },
+                    _validate_launch_app_data,
+                )
+            ),
+        ),
+        (
+            SERVICE_SET_PICTURE_SETTING,
+            handle_set_picture_setting,
+            vol.Schema(
+                {
+                    **_target_selector_fields(),
+                    vol.Required(ATTR_MENU_ID): vol.Coerce(int),
+                    vol.Required(ATTR_MENU_VALUE): vol.Coerce(str),
+                }
+            ),
+        ),
+    ]
+
+    for obsolete in (SERVICE_SET_SOUND_SETTING, SERVICE_SEND_TEXT_INPUT):
+        if hass.services.has_service(DOMAIN, obsolete):
+            hass.services.async_remove(DOMAIN, obsolete)
+
+    for service_name, handler, schema in services_map:
+        if not hass.services.has_service(DOMAIN, service_name):
+            hass.services.async_register(
+                DOMAIN,
+                service_name,
+                handler,
+                schema=schema,
+                supports_response=SupportsResponse.OPTIONAL,
+            )
+
+
+async def async_unload_services(hass: HomeAssistant) -> None:
+    """Unregister all custom services if no active entries remain."""
+    loaded_entries: list[Any] = []
+    if hasattr(hass, "config_entries") and hasattr(hass.config_entries, "async_loaded_entries"):
+        with contextlib.suppress(Exception):
+            res = hass.config_entries.async_loaded_entries(DOMAIN)
+            if isinstance(res, list):
+                loaded_entries = res
+
+    if not loaded_entries and hasattr(hass, "config_entries") and hasattr(hass.config_entries, "async_entries"):
+        with contextlib.suppress(Exception):
+            res = hass.config_entries.async_entries(DOMAIN)
+            if isinstance(res, list):
+                loaded_entries = [e for e in res if getattr(e, "runtime_data", None) is not None]
+
+    if not loaded_entries and hasattr(hass, "data") and isinstance(hass.data, dict) and hass.data.get(DOMAIN):
+        return
+
+    if loaded_entries:
+        return
+
+    services_to_remove = [
+        "get_remote_card",
+        SERVICE_SEND_KEY,
+        SERVICE_LAUNCH_APP,
+        SERVICE_SET_PICTURE_SETTING,
+        SERVICE_SET_SOUND_SETTING,
+        SERVICE_SEND_TEXT_INPUT,
+    ]
+    for service_name in services_to_remove:
+        if hass.services.has_service(DOMAIN, service_name):
+            hass.services.async_remove(DOMAIN, service_name)

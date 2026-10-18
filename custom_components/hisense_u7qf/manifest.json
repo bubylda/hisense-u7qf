@@ -1,0 +1,18 @@
+{
+  "domain": "hisense_u7qf",
+  "name": "Hisense U7QF",
+  "codeowners": [
+    "@bubylda"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/bubylda/hisense-u7qf",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/bubylda/hisense-u7qf/issues",
+  "requirements": [
+    "defusedxml==0.7.1",
+    "paho-mqtt==2.1.0"
+  ],
+  "version": "0.1.6"
+}

@@ -1,0 +1,172 @@
+"""Reauthentication and reconfiguration flow mixin for Hisense VIDAA TV."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+import voluptuous as vol
+from homeassistant import config_entries
+from homeassistant.data_entry_flow import AbortFlow
+from homeassistant.helpers import issue_registry as ir
+
+from .const import (
+    CONF_IP_ADDRESS,
+    CONF_MAC_ADDRESS,
+    DOMAIN,
+)
+from .flow_helpers import async_resolve_mac
+
+if TYPE_CHECKING:
+    from .config_flow import HisenseVidaaConfigFlow
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class ReauthFlowMixin:
+    """Mixin for reauthentication and reconfiguration flow steps."""
+
+    async def _async_finish_reauth(
+        self: HisenseVidaaConfigFlow, reason: str = "reauth_successful"
+    ) -> config_entries.ConfigFlowResult:
+        """Update existing config entry with new credentials and reload."""
+        if self._reauth_entry:
+            auth_data = self._get_client_auth_data()
+            if self.client:
+                await self.hass.async_add_executor_job(self.client.disconnect)
+                self.client = None
+            self.hass.config_entries.async_update_entry(
+                self._reauth_entry,
+                data={**self._reauth_entry.data, **auth_data},
+            )
+            # the credentials are fresh again, so the
+            # persistent "reauthentication required" card must go away.
+            ir.async_delete_issue(
+                self.hass,
+                DOMAIN,
+                f"auth_token_invalidated_{self._reauth_entry.entry_id}",
+            )
+            await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
+        return self.async_abort(reason=reason)
+
+    def _async_mac_is_configured_elsewhere(
+        self: HisenseVidaaConfigFlow,
+    ) -> bool:
+        """Check whether the resolved MAC already belongs to another entry.
+
+        the duplicate/unique-id guard of `_async_init_client_and_auth`
+        is skipped whenever `_reauth_entry` is set, which would silently repoint
+        an entry at a different TV while keeping its old unique_id.
+        """
+        if not self.mac_address or not self._reauth_entry:
+            return False
+        for other in self.hass.config_entries.async_entries(DOMAIN):
+            if other.entry_id == self._reauth_entry.entry_id:
+                continue
+            if other.unique_id == self.mac_address:
+                return True
+        return False
+
+    async def async_step_reauth(
+        self: HisenseVidaaConfigFlow, entry_data: dict[str, Any]
+    ) -> config_entries.ConfigFlowResult:
+        """Handle reauthorization initiated by Home Assistant."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        self.ip_address = entry_data[CONF_IP_ADDRESS]
+        self.mac_address = entry_data.get(CONF_MAC_ADDRESS)
+        if not self.mac_address and self.ip_address:
+            self.mac_address = await async_resolve_mac(self.hass, self.ip_address)
+        self.auth_profile = "legacy"
+        self._resolve_ssl_certs()
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self: HisenseVidaaConfigFlow, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Dialog to confirm reauth and trigger PIN."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            from .u7qf_client import U7QFClient as HisenseTvClient
+
+            # Disconnect any existing running client for this entry to prevent
+            # duplicate MQTT Client ID collisions during the reauth flow.
+            await self._async_disconnect_existing_client()
+
+            self.client = HisenseTvClient(
+                self.ip_address,
+                self.mac_address,
+                auth_profile=self.auth_profile,
+                certfile=self.certfile if self.use_ssl else None,
+                keyfile=self.keyfile if self.use_ssl else None,
+                use_ssl=self.use_ssl,
+            )
+            try:
+                await self.client.async_start_auth()
+
+                if self.auth_profile in ("legacy", "static"):
+                    # The TV may demand a one-off PIN pairing.
+                    return await self._async_static_pairing_step(True, "reauth_successful")
+                return await self.async_step_auth()
+            except AbortFlow:
+                # HA flow control must never be reported as cannot_connect.
+                raise
+            except Exception as e:
+                _LOGGER.warning("[%s] Failed to connect to TV for reauth: %s", self.ip_address, e)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            description_placeholders={"ip_address": self.ip_address or ""},
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self: HisenseVidaaConfigFlow, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Handle reconfigure initiated from 3-dots menu in HA UI."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        errors: dict[str, str] = {}
+        current_data = self._reauth_entry.data if self._reauth_entry else {}
+        default_ip = current_data.get(CONF_IP_ADDRESS, "")
+
+        if user_input is not None:
+            self.ip_address = user_input[CONF_IP_ADDRESS]
+            self.auth_profile = "legacy"
+            # the entry may be repointed at a different TV, so the MAC
+            # must be resolved for the *new* IP before the target is re-paired.
+            self.mac_address = await async_resolve_mac(self.hass, self.ip_address)
+            if not self.mac_address:
+                self.mac_address = current_data.get(CONF_MAC_ADDRESS)
+
+            # only the entry being reconfigured may keep this MAC.
+            if self._async_mac_is_configured_elsewhere():
+                return self.async_abort(reason="already_configured")
+
+            if self.auth_profile in ("auto", "legacy"):
+                if not self._resolve_ssl_certs():
+                    return await self.async_step_certs()
+            else:
+                return await self.async_step_certs()
+
+            try:
+                return await self._async_init_client_and_auth(
+                    is_reauth=True, reauth_reason="reconfigure_successful"
+                )
+            except AbortFlow:
+                raise
+            except Exception as e:
+                _LOGGER.warning("[%s] Failed to initiate reconfigure pairing: %s", self.ip_address, e)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({
+                vol.Required(CONF_IP_ADDRESS, default=default_ip): str,
+
+            }),
+            errors=errors,
+        )

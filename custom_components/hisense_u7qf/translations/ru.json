@@ -1,0 +1,267 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hisense U7QF",
+        "description": "Введите IP-адрес телевизора. Модели кроме 50U7QF / 50A690FEVS не проверены и требуют явного разрешения экспериментальной поддержки родственных U4-моделей.",
+        "data": {
+          "ip_address": "IP-адрес",
+          "experimental_model": "Разрешить непроверенную родственную модель U4"
+        }
+      },
+      "discovery_confirm": {
+        "title": "Discovered Hisense VIDAA TV",
+        "description": "Do you want to set up {name} at {ip_address}?"
+      },
+      "auth": {
+        "title": "Код с экрана телевизора",
+        "description": "Введите PIN, показанный телевизором.",
+        "data": {
+          "pin_code": "PIN"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Повторное сопряжение",
+        "description": "Подключиться к телевизору {ip_address} повторно. При необходимости телевизор покажет PIN."
+      },
+      "reconfigure": {
+        "title": "Подключение Hisense U7QF",
+        "data": {
+          "ip_address": "IP-адрес"
+        }
+      },
+      "options": {
+        "title": "Добавить Hisense U7QF",
+        "description": "Будут добавлены пульт, режим изображения, яркость экрана, интерполяция кадров, локальное затемнение и игровой режим — по данным телевизора."
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the TV.",
+      "invalid_auth": "Invalid PIN code. Please try again.",
+      "certs_not_found": "Certificate or private key file was not found at the specified path. Please check the file location and permissions.",
+      "unknown": "An unknown error occurred."
+    },
+    "abort": {
+      "reauth_successful": "Re-authentication was successful.",
+      "reconfigure_successful": "Reconfiguration was successful.",
+      "already_configured": "This device is already configured.",
+      "not_vidaa_tv": "Discovered device is not a compatible Hisense VIDAA TV.",
+      "unsupported_model": "Модель не проверена. Для родственной U4-модели начните настройку заново с экспериментальной поддержкой.",
+      "bundled_certificates_missing": "Встроенные сертификаты приложения отсутствуют. Переустановите интеграцию.",
+      "old_integration_active": "Сначала отключите старую интеграцию Hisense VIDAA для этого телевизора. Удалять её не требуется."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Параметры Hisense U7QF",
+        "data": {
+          "enable_wol": "Включение через Wake-on-LAN",
+          "include_apps_in_sources": "Приложения в списке источников медиаплеера",
+          "enable_cec_names": "Названия устройств HDMI-CEC",
+          "hide_tuner_sources": "Скрывать антенные входы TV",
+          "assume_screen_state": "Предполагать состояние экрана"
+        },
+        "data_description": {
+          "assume_screen_state": "Вместо двух кнопок создать переключатель «Только звук». Его состояние определяется командами, а не телевизором; после переподключения оно неизвестно."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "picture_catalog": {
+        "name": "Каталог настроек изображения"
+      },
+      "model": {
+        "name": "Модель"
+      },
+      "firmware": {
+        "name": "Прошивка"
+      }
+    },
+    "binary_sensor": {
+      "mqtt_connected": {
+        "name": "MQTT Connected"
+      },
+      "in_use": {
+        "name": "In Use"
+      }
+    },
+    "button": {
+      "remote_up": {
+        "name": "Вверх"
+      },
+      "remote_down": {
+        "name": "Вниз"
+      },
+      "remote_left": {
+        "name": "Влево"
+      },
+      "remote_right": {
+        "name": "Вправо"
+      },
+      "remote_ok": {
+        "name": "OK"
+      },
+      "remote_back": {
+        "name": "Назад"
+      },
+      "remote_home": {
+        "name": "Главная"
+      },
+      "remote_menu": {
+        "name": "Меню"
+      },
+      "remote_exit": {
+        "name": "Выход"
+      },
+      "screen_off": {
+        "name": "Выключить экран"
+      },
+      "screen_on": {
+        "name": "Включить экран"
+      }
+    },
+    "notify": {
+      "notifications": {
+        "name": "Notifications"
+      }
+    },
+    "select": {
+      "motion_smoothing": {
+        "name": "Интерполяция кадров (MEMC)"
+      },
+      "local_dimming": {
+        "name": "Локальное затемнение"
+      },
+      "input": {
+        "name": "Вход"
+      }
+    },
+    "number": {
+      "backlight": {
+        "name": "Яркость экрана"
+      }
+    },
+    "remote": {
+      "remote": {
+        "name": "Remote"
+      }
+    },
+    "switch": {
+      "game_mode": {
+        "name": "Игровой режим"
+      },
+      "audio_only_mode": {
+        "name": "Только звук (предполагаемое состояние)"
+      }
+    }
+  },
+  "services": {
+    "send_key": {
+      "name": "Send Key",
+      "description": "Send a key press or sequence of key presses to the TV.",
+      "fields": {
+        "key": {
+          "name": "Key",
+          "description": "Key code to send (e.g. KEY_POWER, KEY_HOME, KEY_VOLUMEUP)."
+        },
+        "repeat": {
+          "name": "Repeat",
+          "description": "Number of times to repeat the key press."
+        },
+        "delay": {
+          "name": "Delay",
+          "description": "Delay in seconds between repeated key presses."
+        }
+      }
+    },
+    "launch_app": {
+      "name": "Launch App",
+      "description": "Запустить приложение из списка телевизора. Произвольные URL и deep links не поддерживаются.",
+      "fields": {
+        "app": {
+          "name": "Application Name or URL",
+          "description": "The app name or deep link URL. Optional when an application ID is supplied."
+        },
+        "app_id": {
+          "name": "Application ID",
+          "description": "Optional TV application ID to use instead of the ID from the app list."
+        },
+        "app_name": {
+          "name": "Application Name Override",
+          "description": "Optional application name to include in the launch request."
+        },
+        "url": {
+          "name": "Launch URL",
+          "description": "Optional URL or deep link to pass to the application."
+        }
+      }
+    },
+    "set_picture_setting": {
+      "name": "Set Picture Setting",
+      "description": "Изменить обычный параметр изображения U7QF. Калибровочные и служебные поля заблокированы.",
+      "fields": {
+        "menu_id": {
+          "name": "Menu ID",
+          "description": "Numeric menu ID (e.g. 91 for Picture Mode, 92 for Backlight, 93 for Brightness, 94 for Contrast)."
+        },
+        "menu_value": {
+          "name": "Menu Value",
+          "description": "Setting value or preset mode name."
+        }
+      }
+    },
+    "get_remote_card": {
+      "name": "Сформировать карточку пульта",
+      "description": "Возвращает стандартную карточку панели с реальными entity_id этого телевизора. Скопируйте объект card из ответа в карточку «Вручную»."
+    }
+  },
+  "exceptions": {
+    "no_target_device": {
+      "message": "No matching Hisense VIDAA TV was found for the specified service call target."
+    },
+    "not_connected": {
+      "message": "Cannot send command: TV is currently disconnected."
+    }
+  },
+  "selector": {
+    "auth_profile": {
+      "options": {
+        "auto": "Auto Detect (Recommended)",
+        "modern": "VIDAA 2.0 / 2024+ (vidaa_2024)",
+        "middle": "VIDAA 1.5 / Middle (3000–3285)",
+        "remotenow": "RemoteNOW / 2018–2023 (standard)",
+        "legacy": "Legacy Static (Pre-2022 / Static Credentials)"
+      }
+    }
+  },
+  "issues": {
+    "certificate_missing": {
+      "title": "Missing VIDAA Client Certificates",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Verify Client Certificates",
+            "description": "Once you have copied hisense.crt and hisense.key into /config/ssl or /ssl, submit this form to verify."
+          }
+        },
+        "error": {
+          "certificates_still_missing": "Certificates are still missing. Please ensure hisense.crt and hisense.key exist."
+        }
+      }
+    },
+    "auth_token_invalidated": {
+      "title": "Hisense TV: Reauthentication Required",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Re-pair with Hisense TV",
+            "description": "Home Assistant can no longer authenticate with your Hisense TV ({ip_address}). The TV broker has rejected the stored access and refresh tokens (this usually happens after a firmware update or hard power-cycle).\n\nClick **Submit** to start the pairing flow. Make sure your TV is powered **on** (not in standby) — a PIN code will appear on screen."
+          }
+        }
+      }
+    }
+  }
+}

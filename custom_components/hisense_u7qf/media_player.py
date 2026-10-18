@@ -1,0 +1,408 @@
+"""Media player platform for Hisense VIDAA TV integration."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any
+
+from homeassistant.components.media_player import (
+    MediaPlayerDeviceClass,
+    MediaPlayerEntity,
+    MediaPlayerEntityFeature,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .client import HisenseTvClient
+from .compatibility import is_tuner, policy
+from .const import (
+    CONF_ENABLE_CEC_NAMES,
+    CONF_ENABLE_MEDIA_CONTROLS,
+    CONF_ENABLE_WOL,
+    CONF_INCLUDE_APPS_IN_SOURCES,
+    CONF_SECONDARY_MAC_ADDRESS,
+    DEFAULT_ENABLE_CEC_NAMES,
+    DEFAULT_ENABLE_MEDIA_CONTROLS,
+    DEFAULT_ENABLE_WOL,
+    DEFAULT_INCLUDE_APPS_IN_SOURCES,
+)
+from .entity import HisenseVidaaEntity
+from .tv.state import apply_state_update
+
+if TYPE_CHECKING:
+    from . import HisenseVidaaConfigEntry
+from .tv.media import (
+    build_media_channel_label,
+    build_media_player_current_source,
+    build_media_player_source_list,
+    execute_play_media,
+    execute_select_source,
+    parse_applist_data,
+    parse_media_state_broadcast,
+    parse_sourcelist_data,
+    parse_volume_broadcast,
+)
+from .tv.settings import (
+    DEFAULT_MENU_ID_SOUND_MODE,
+    find_menu_item_by_name,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+PARALLEL_UPDATES = 0
+
+
+class HisenseVidaaMediaPlayer(HisenseVidaaEntity, MediaPlayerEntity):
+    _attr_name = None
+    _attr_device_class = MediaPlayerDeviceClass.TV
+
+    def __init__(
+        self,
+        client: HisenseTvClient,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(client=client, entry=entry)
+        self._attr_unique_id = f"{self._entry_id}_media_player"
+        self._volume = 0
+        self._muted = False
+        self._source = None
+        self._source_list = []
+        self._source_dict = {}
+        self._app_list = []
+        self._app_dict = {}
+        self._channel_infos = {}
+        self._connected_device = None
+        self._channel_name = None
+        self._channel_num = None
+        self._volume_type = 0
+        self._state = STATE_ON if client.is_on else STATE_OFF
+
+    async def async_added_to_hass(self) -> None:
+        """Register callbacks and query initial state when entity is added."""
+        self._client.register_connected_callback(self._handle_connected)
+        self._client.register_state_callback(self._handle_state_update)
+        self._client.register_volume_callback(self._handle_volume_update)
+        self._client.register_sourcelist_callback(self._handle_sourcelist_update)
+        self._client.register_applist_callback(self._handle_applist_update)
+        self._client.register_sound_callback(self._handle_sound_update)
+        self._client.register_disconnected_callback(self._handle_disconnected)
+
+        # Sync state now that callbacks are registered and active.
+        # Do not assume "on": the broker is also reachable in standby (fake_sleep).
+        if getattr(self._client, "connected", False):
+            self._state = STATE_ON if self._client.is_on else STATE_OFF
+            if not self._source_dict or not self._app_dict:
+                await self.hass.async_add_executor_job(self._client.query_initial_state)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister callbacks when entity is removed."""
+        self._client.unregister_connected_callback(self._handle_connected)
+        self._client.unregister_state_callback(self._handle_state_update)
+        self._client.unregister_volume_callback(self._handle_volume_update)
+        self._client.unregister_sourcelist_callback(self._handle_sourcelist_update)
+        self._client.unregister_applist_callback(self._handle_applist_update)
+        self._client.unregister_sound_callback(self._handle_sound_update)
+        self._client.unregister_disconnected_callback(self._handle_disconnected)
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID."""
+        return self._attr_unique_id
+
+    @property
+    def state(self) -> str | None:
+        if getattr(self._client, "state", "unknown") == "unknown":
+            return None
+        if not self._client.is_on:
+            return STATE_OFF
+        return STATE_ON
+
+    @property
+    def available(self) -> bool:
+        return bool(self._entry_id and (self._client.access_token or self._mac))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return device-specific and Live TV metadata attributes."""
+        attrs: dict[str, Any] = {
+            "mqtt_connected": self._client.connected,
+            "auth_profile": self._client.auth_profile,
+        }
+        if self._mac:
+            attrs["mac_address"] = self._mac
+        if self._connected_device:
+            attrs["connected_device"] = self._connected_device
+        ch_name = self._channel_name or (self._client.current_channel if self._client else None)
+        if ch_name:
+            attrs["channel_name"] = ch_name
+        ch_num = self._channel_num or (self._client.channel_number if self._client else None)
+        if ch_num:
+            attrs["channel_num"] = ch_num
+            attrs["channel_number"] = ch_num
+        if self._client and self._client.current_program:
+            attrs["program_title"] = self._client.current_program
+        if self._volume_type is not None:
+            attrs["audio_output"] = "ARC / eARC" if self._volume_type == 1 else "TV Speakers"
+        return attrs
+
+    @property
+    def media_channel(self) -> str | None:
+        """Channel currently tuned to for TV tuner sources."""
+        return build_media_channel_label(self._channel_name, self._channel_num)
+
+    @property
+    def volume_level(self) -> float | None:
+        if self._volume is not None:
+            return self._volume / 100.0
+        return None
+
+    @property
+    def is_volume_muted(self) -> bool:
+        return self._muted
+
+    @property
+    def source(self) -> str | None:
+        enable_cec = self._options.get(CONF_ENABLE_CEC_NAMES, DEFAULT_ENABLE_CEC_NAMES)
+        return build_media_player_current_source(
+            source=self._source,
+            connected_device=self._connected_device,
+            enable_cec=enable_cec,
+        )
+
+    @property
+    def media_image_url(self) -> str | None:
+        """Return dynamic artwork URL for currently playing app."""
+        if self._source and self._source in self._app_dict:
+            app_info = self._app_dict[self._source]
+            icon = app_info.get("httpIcon")
+            if icon and "http" in icon:
+                return "http" + icon.split("http", 1)[1]
+        return None
+
+    @property
+    def source_list(self) -> list[str]:
+        enable_cec = self._options.get(CONF_ENABLE_CEC_NAMES, DEFAULT_ENABLE_CEC_NAMES)
+        include_apps = self._options.get(CONF_INCLUDE_APPS_IN_SOURCES, DEFAULT_INCLUDE_APPS_IN_SOURCES)
+        return build_media_player_source_list(
+            source_dict={
+                k: v
+                for k, v in self._source_dict.items()
+                if not (policy(self._client).hide_tuner_sources and is_tuner(v))
+            },
+            app_dict=self._app_dict,
+            current_source=None
+            if policy(self._client).hide_tuner_sources and is_tuner({"sourcename": self._source})
+            else self._source,
+            connected_device=self._connected_device,
+            enable_cec=enable_cec,
+            include_apps=include_apps,
+        )
+
+    @property
+    def media_title(self) -> str | None:
+        """Return the title of current playing media or Live TV program."""
+        if self._state == STATE_OFF:
+            return None
+        if self._client and self._client.current_program:
+            return self._client.current_program
+        return self._source
+
+    @property
+    def media_series_title(self) -> str | None:
+        """Return the channel or series title if watching Live TV."""
+        if self._state == STATE_OFF:
+            return None
+        if self._channel_name or (self._client and self._client.current_channel):
+            ch_name = self._channel_name or self._client.current_channel
+            ch_num = self._channel_num or (self._client.channel_number if self._client else None)
+            if ch_num:
+                return f"{ch_name} ({ch_num})"
+            return ch_name
+        return None
+
+    @property
+    def sound_mode(self) -> str | None:
+        """Return the current sound mode if supported."""
+        return getattr(self._client, "sound_mode", None)
+
+    @property
+    def sound_mode_list(self) -> list[str] | None:
+        """Return the list of available sound modes if supported by the TV."""
+        sm_item = find_menu_item_by_name(
+            getattr(self._client, "sound_settings", None),
+            "Sound Mode",
+            DEFAULT_MENU_ID_SOUND_MODE,
+        )
+        if sm_item and sm_item.options:
+            return sm_item.options
+        return None
+
+    @property
+    def supported_features(self) -> MediaPlayerEntityFeature:
+        base = (
+            MediaPlayerEntityFeature.TURN_ON
+            | MediaPlayerEntityFeature.TURN_OFF
+            | MediaPlayerEntityFeature.VOLUME_SET
+            | MediaPlayerEntityFeature.VOLUME_STEP
+            | MediaPlayerEntityFeature.VOLUME_MUTE
+            | MediaPlayerEntityFeature.SELECT_SOURCE
+            | MediaPlayerEntityFeature.PLAY_MEDIA
+        )
+        if self.sound_mode_list:
+            base |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
+        enable_controls = self._options.get(CONF_ENABLE_MEDIA_CONTROLS, DEFAULT_ENABLE_MEDIA_CONTROLS)
+        if enable_controls:
+            base |= (
+                MediaPlayerEntityFeature.PLAY
+                | MediaPlayerEntityFeature.PAUSE
+                | MediaPlayerEntityFeature.STOP
+                | MediaPlayerEntityFeature.NEXT_TRACK
+                | MediaPlayerEntityFeature.PREVIOUS_TRACK
+            )
+        return base
+
+    async def async_turn_on(self) -> None:
+        """Turn on or wake the TV."""
+        mac_targets = []
+        if self._options.get(CONF_ENABLE_WOL, DEFAULT_ENABLE_WOL):
+            if self._mac:
+                mac_targets.append(self._mac)
+            sec_mac = self._options.get(CONF_SECONDARY_MAC_ADDRESS)
+            if sec_mac and sec_mac not in mac_targets:
+                mac_targets.append(sec_mac)
+
+        await self.hass.async_add_executor_job(self._client.turn_on, mac_targets if mac_targets else None)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self) -> None:
+        """Turn off the TV."""
+        await self.hass.async_add_executor_job(self._client.turn_off)
+        self.async_write_ha_state()
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        await self.hass.async_add_executor_job(self._client.set_volume, int(volume * 100))
+
+    async def async_volume_up(self) -> None:
+        await self.hass.async_add_executor_job(self._client.send_key, "KEY_VOLUMEUP")
+
+    async def async_volume_down(self) -> None:
+        await self.hass.async_add_executor_job(self._client.send_key, "KEY_VOLUMEDOWN")
+
+    async def async_mute_volume(self, mute: bool) -> None:
+        # KEY_MUTE is a toggle: only send it when the requested state differs from
+        # the state tracked from TV broadcasts, so idempotent automations don't flip
+        # the TV on every run.
+        if bool(mute) == bool(self._muted):
+            return
+        await self.hass.async_add_executor_job(self._client.send_key, "KEY_MUTE")
+
+    async def async_media_play(self) -> None:
+        await self.hass.async_add_executor_job(self._client.send_key, "KEY_PLAY")
+
+    async def async_media_pause(self) -> None:
+        await self.hass.async_add_executor_job(self._client.send_key, "KEY_PAUSE")
+
+    async def async_media_stop(self) -> None:
+        await self.hass.async_add_executor_job(self._client.send_key, "KEY_STOP")
+
+    async def async_media_next_track(self) -> None:
+        await self.hass.async_add_executor_job(self._client.send_key, "KEY_FORWARDS")
+
+    async def async_media_previous_track(self) -> None:
+        await self.hass.async_add_executor_job(self._client.send_key, "KEY_BACK")
+
+    async def async_play_media(self, media_type: str, media_id: str, **kwargs: Any) -> None:
+        """Launch an app, tune to channel, open URL/deep-link, or execute key command."""
+        await self.hass.async_add_executor_job(execute_play_media, self._client, self._app_dict, media_type, media_id)
+
+    async def async_select_source(self, source: str) -> None:
+        """Select input source or smart application."""
+        try:
+            await self.hass.async_add_executor_job(
+                execute_select_source, self._client, self._source_dict, self._app_dict, source
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+
+    async def async_select_sound_mode(self, sound_mode: str) -> None:
+        """Select sound mode."""
+        await self.hass.async_add_executor_job(self._client.set_sound_mode, sound_mode)
+        self.async_write_ha_state()
+
+    def _handle_sound_update(self, data: dict[str, Any]) -> None:
+        """Handle sound setting updates from TV."""
+        self.schedule_update_ha_state()
+
+    def _handle_state_update(self, data: dict[str, Any]) -> None:
+        apply_state_update(self._client, data)
+        if not isinstance(data, dict):
+            return
+
+        parsed = parse_media_state_broadcast(data)
+        statetype = parsed["statetype"]
+
+        was_off = self._state == STATE_OFF
+        self._state = STATE_ON if parsed["is_on"] else STATE_OFF
+
+        if parsed["is_on"] and statetype not in ("fake_sleep_0", "fake_sleep_1"):
+            if statetype in ("sourceswitch", "app", "livetv"):
+                self._source = parsed["source"]
+                self._connected_device = parsed["connected_device"]
+                self._channel_name = parsed["channel_name"]
+                self._channel_num = parsed["channel_num"]
+        elif not parsed["is_on"]:
+            self._connected_device = None
+            self._channel_name = None
+            self._channel_num = None
+
+        if (
+            parsed["is_on"]
+            and (was_off or not self._source_dict or not self._app_dict)
+            and self.hass
+            and hasattr(self.hass, "loop")
+            and self.hass.loop
+        ):
+            self.hass.loop.call_soon_threadsafe(self.hass.async_add_executor_job, self._client.query_initial_state)
+
+        self.schedule_update_ha_state()
+
+    def _handle_volume_update(self, data: dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            return
+        self._volume, self._volume_type, self._muted = parse_volume_broadcast(
+            data, self._volume, self._volume_type, self._muted
+        )
+        self.schedule_update_ha_state()
+
+    def _handle_sourcelist_update(self, data: list[dict[str, Any]]) -> None:
+        if not data:
+            return
+        self._source_dict = parse_sourcelist_data(data)
+        self.schedule_update_ha_state()
+
+    def _handle_applist_update(self, data: list[dict[str, Any]]) -> None:
+        if not data:
+            return
+        self._app_list, self._app_dict = parse_applist_data(data)
+        self.schedule_update_ha_state()
+
+    def _handle_connected(self) -> None:
+        # Power state is set by the retained state broadcast that follows the connect.
+        self._state = STATE_ON if (self._client and self._client.is_on) else STATE_OFF
+        self.schedule_update_ha_state()
+
+    def _handle_disconnected(self) -> None:
+        self._state = STATE_OFF
+        self.schedule_update_ha_state()
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: HisenseVidaaConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    client: HisenseTvClient = config_entry.runtime_data.client
+    async_add_entities([HisenseVidaaMediaPlayer(client=client, entry=config_entry)])
