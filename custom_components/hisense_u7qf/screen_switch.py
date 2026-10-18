@@ -29,7 +29,6 @@ class HisenseU7QFAssumedAudioOnlySwitch(HisenseVidaaEntity, SwitchEntity):
 
     _attr_translation_key = "audio_only_mode"
     _attr_icon = "mdi:television-off"
-    _attr_assumed_state = True
 
     def __init__(self, client, entry):
         super().__init__(client, entry)
@@ -40,6 +39,13 @@ class HisenseU7QFAssumedAudioOnlySwitch(HisenseVidaaEntity, SwitchEntity):
     @property
     def is_on(self):
         return self._assumed_audio_only
+
+    @property
+    def assumed_state(self):
+        # HA renders separate on/off buttons when this flag is true. Once a
+        # command establishes a value, expose a toggle while retaining the
+        # explicit state_source attribute (this is still not TV telemetry).
+        return self._assumed_audio_only is None
 
     @property
     def available(self):

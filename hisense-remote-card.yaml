@@ -1,0 +1,585 @@
+---
+type: vertical-stack
+cards:
+- type: vertical-stack
+  title: Пульт
+  cards:
+  - type: media-control
+    entity: media_player.spalnia_hisense_vidaa_tv
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      show_state: false
+      name: Включить
+      icon: mdi:power
+      tap_action:
+        action: perform-action
+        perform_action: remote.turn_on
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      show_state: false
+      name: Выключить
+      icon: mdi:power-standby
+      tap_action:
+        action: perform-action
+        perform_action: remote.turn_off
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+      hold_action:
+        action: none
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+    - type: button
+      name: Выключить экран
+      icon: mdi:television-off
+      entity: button.spalnia_hisense_vidaa_tv_turn_screen_off
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: button.press
+        target:
+          entity_id: button.spalnia_hisense_vidaa_tv_turn_screen_off
+      hold_action:
+        action: none
+    - type: button
+      name: Включить экран
+      icon: mdi:television
+      entity: button.spalnia_hisense_vidaa_tv_turn_screen_on
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: button.press
+        target:
+          entity_id: button.spalnia_hisense_vidaa_tv_turn_screen_on
+      hold_action:
+        action: none
+  - type: entities
+    show_header_toggle: false
+    entities:
+    - entity: select.spalnia_hisense_vidaa_tv_input
+      name: Источник
+  - type: grid
+    columns: 3
+    square: false
+    cards:
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Меню
+      icon: mdi:menu
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: menu
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Вверх
+      icon: mdi:chevron-up
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: up
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Главная
+      icon: mdi:home-outline
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: home
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Влево
+      icon: mdi:chevron-left
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: left
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: OK
+      icon: mdi:circle-outline
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: ok
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Вправо
+      icon: mdi:chevron-right
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: right
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Назад
+      icon: mdi:keyboard-return
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: back
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Вниз
+      icon: mdi:chevron-down
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: down
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Выход
+      icon: mdi:exit-to-app
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: exit
+          num_repeats: 1
+      hold_action:
+        action: none
+  - type: grid
+    columns: 3
+    square: false
+    cards:
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Тише
+      icon: mdi:volume-minus
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: volume_down
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Без звука
+      icon: mdi:volume-mute
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: mute
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Громче
+      icon: mdi:volume-plus
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: volume_up
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Перемотка назад
+      icon: mdi:rewind
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: rewind
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Пуск
+      icon: mdi:play
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: play
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Вперёд
+      icon: mdi:fast-forward
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: fast_forward
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Пауза
+      icon: mdi:pause
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: pause
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Стоп
+      icon: mdi:stop
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: stop
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Субтитры
+      icon: mdi:subtitles-outline
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: subtitle
+          num_repeats: 1
+      hold_action:
+        action: none
+- type: entities
+  title: Изображение
+  show_header_toggle: false
+  entities:
+  - select.spalnia_hisense_vidaa_tv_picture_mode
+  - number.spalnia_hisense_vidaa_tv_screen_brightness
+  - select.spalnia_hisense_vidaa_tv_motion_smoothing_memc
+  - select.spalnia_hisense_vidaa_tv_local_dimming
+  - switch.spalnia_hisense_vidaa_tv_game_mode
+- type: vertical-stack
+  title: Цифры и цветные кнопки
+  cards:
+  - type: grid
+    columns: 3
+    square: false
+    cards:
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '1'
+      icon: mdi:numeric-1
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '1'
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '2'
+      icon: mdi:numeric-2
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '2'
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '3'
+      icon: mdi:numeric-3
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '3'
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '4'
+      icon: mdi:numeric-4
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '4'
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '5'
+      icon: mdi:numeric-5
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '5'
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '6'
+      icon: mdi:numeric-6
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '6'
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '7'
+      icon: mdi:numeric-7
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '7'
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '8'
+      icon: mdi:numeric-8
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '8'
+          num_repeats: 1
+      hold_action:
+        action: none
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '9'
+      icon: mdi:numeric-9
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '9'
+          num_repeats: 1
+      hold_action:
+        action: none
+  - type: grid
+    columns: 1
+    square: false
+    cards:
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: '0'
+      icon: mdi:numeric-0
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: '0'
+          num_repeats: 1
+      hold_action:
+        action: none
+  - type: grid
+    columns: 4
+    square: false
+    cards:
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Красная
+      icon: mdi:circle
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: red
+          num_repeats: 1
+      hold_action:
+        action: none
+      color: "#e53935"
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Зелёная
+      icon: mdi:circle
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: green
+          num_repeats: 1
+      hold_action:
+        action: none
+      color: "#43a047"
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Жёлтая
+      icon: mdi:circle
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: yellow
+          num_repeats: 1
+      hold_action:
+        action: none
+      color: "#fdd835"
+    - type: button
+      entity: remote.spalnia_hisense_vidaa_tv_remote
+      name: Синяя
+      icon: mdi:circle
+      show_state: false
+      tap_action:
+        action: perform-action
+        perform_action: remote.send_command
+        target:
+          entity_id: remote.spalnia_hisense_vidaa_tv_remote
+        data:
+          command: blue
+          num_repeats: 1
+      hold_action:
+        action: none
+      color: "#1e88e5"

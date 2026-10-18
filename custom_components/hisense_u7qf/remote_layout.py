@@ -27,7 +27,7 @@ REMOTE_COMMANDS = (
 )
 
 
-def build_remote_card(entities):
+def build_remote_sections(entities):
     """No third-party cards, guessed entity IDs, input cycling or power toggles."""
     remote = entities["remote"]
 
@@ -42,6 +42,7 @@ def build_remote_card(entities):
     def key(name, command, icon):
         button = {
             "type": "button",
+            "entity": remote,
             "name": name,
             "icon": "mdi:" + icon,
             "show_state": False,
@@ -53,7 +54,7 @@ def build_remote_card(entities):
     def grid(buttons, columns=3):
         return {"type": "grid", "columns": columns, "square": False, "cards": buttons}
 
-    cards = [{"type": "markdown", "content": "## Hisense U7QF"}]
+    cards = []
     if entities.get("media_player"):
         cards.append({"type": "media-control", "entity": entities["media_player"]})
     cards.append(
@@ -61,6 +62,8 @@ def build_remote_card(entities):
             [
                 {
                     "type": "button",
+                    "entity": remote,
+                    "show_state": False,
                     "name": name,
                     "icon": icon,
                     "tap_action": action(service, remote),
@@ -93,17 +96,19 @@ def build_remote_card(entities):
     if entities.get("audio_only_mode"):
         cards.append(
             {
-                "type": "button",
-                "name": "Только звук",
-                "icon": "mdi:television-off",
-                "entity": entities["audio_only_mode"],
-                "show_state": True,
-                "tap_action": {"action": "toggle"},
-                "hold_action": {"action": "none"},
+                "type": "entities",
+                "show_header_toggle": False,
+                "entities": [{"entity": entities["audio_only_mode"], "name": "Только звук"}],
             }
         )
     elif screen_buttons:
         cards.append(grid(screen_buttons, 2))
+    if entities.get("input"):
+        cards.append({
+            "type": "entities",
+            "show_header_toggle": False,
+            "entities": [{"entity": entities["input"], "name": "Источник"}],
+        })
     cards.append(
         grid(
             [
@@ -130,7 +135,7 @@ def build_remote_card(entities):
                     ("Тише", "volume_down", "volume-minus"),
                     ("Без звука", "mute", "volume-mute"),
                     ("Громче", "volume_up", "volume-plus"),
-                    ("Назад", "rewind", "rewind"),
+                    ("Перемотка назад", "rewind", "rewind"),
                     ("Пуск", "play", "play"),
                     ("Вперёд", "fast_forward", "fast-forward"),
                     ("Пауза", "pause", "pause"),
@@ -140,14 +145,19 @@ def build_remote_card(entities):
             ]
         )
     )
+    sections = {"main": {"type": "vertical-stack", "title": "Пульт", "cards": cards}}
     rows = [
         entities[k]
-        for k in ("input", "picture_mode", "backlight", "motion_smoothing", "local_dimming", "game_mode")
+        for k in ("picture_mode", "backlight", "motion_smoothing", "local_dimming", "game_mode")
         if entities.get(k)
     ]
     if rows:
-        cards.append({"type": "entities", "title": "Вход и изображение", "show_header_toggle": False, "entities": rows})
-    cards.append(grid([key(str(n), str(n), "numeric-" + str(n)) for n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 0)]))
+        sections["picture"] = {
+            "type": "entities", "title": "Изображение", "show_header_toggle": False, "entities": rows
+        }
+    # Keep zero centered without entity-less placeholder buttons.
+    digits = grid([key(str(n), str(n), "numeric-" + str(n)) for n in range(1, 10)])
+    zero = grid([key("0", "0", "numeric-0")], 1)
     colors = []
     for name, cmd, color in [
         ("Красная", "red", "#e53935"),
@@ -158,5 +168,12 @@ def build_remote_card(entities):
         button = key(name, cmd, "circle")
         button["color"] = color
         colors.append(button)
-    cards.append(grid(colors, 4))
-    return {"type": "vertical-stack", "cards": cards}
+    sections["keypad"] = {
+        "type": "vertical-stack", "title": "Цифры и цветные кнопки", "cards": [digits, zero, grid(colors, 4)]
+    }
+    return sections
+
+
+def build_remote_card(entities):
+    """A single native card; each section can also be added independently."""
+    return {"type": "vertical-stack", "cards": list(build_remote_sections(entities).values())}

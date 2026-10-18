@@ -107,7 +107,7 @@ set_picture_setting:
 
 get_remote_card:
   name: Generate TV remote card
-  description: Return a native Lovelace remote layout using this TV's real entity IDs. Copy the card object from the response into a Manual dashboard card.
+  description: Return native dashboard cards using this TV's registered entity IDs, even while disconnected. Copy the contents of card into a Manual card, or add cards.main, cards.picture and cards.keypad separately. Do not paste the entire response.
   target:
     entity:
       integration: hisense_u7qf

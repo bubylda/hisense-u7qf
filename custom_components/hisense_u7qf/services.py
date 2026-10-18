@@ -339,9 +339,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     async def handle_get_remote_card(call: ServiceCall) -> dict[str, Any]:
         from homeassistant.helpers import entity_registry as er
 
-        from .remote_layout import build_remote_card
+        from .remote_layout import build_remote_card, build_remote_sections
 
-        clients = _resolve_service_targets(hass, call)
+        # This is registry-only configuration generation, not a TV command.
+        # In standby/disconnected state the card must still be creatable.
+        clients = _get_target_clients(hass, call)
         if len(clients) != 1:
             raise ServiceValidationError("Select exactly one Hisense U7QF television")
         entries = [
@@ -374,7 +376,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                     mapping[suffix] = entity.entity_id
         if "remote" not in mapping:
             raise ServiceValidationError("Remote entity is not registered")
-        return {"card": build_remote_card(mapping), "entity_ids": mapping}
+        return {
+            "card": build_remote_card(mapping),
+            "cards": build_remote_sections(mapping),
+            "entity_ids": mapping,
+        }
 
     # without a schema a bad `repeat`/`delay` reached the handler and
     # raised a raw TypeError, and the strings.json `exceptions` keys were dead.

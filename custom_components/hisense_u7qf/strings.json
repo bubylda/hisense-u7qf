@@ -267,7 +267,7 @@
     },
     "get_remote_card": {
       "name": "Generate TV remote card",
-      "description": "Returns a native dashboard card using this television’s registered entity IDs. Copy the card object from the response into a Manual card."
+      "description": "Returns native dashboard cards using registered entity IDs, even while disconnected. Paste the contents of card into a Manual card, or add cards.main, cards.picture and cards.keypad separately. Do not paste the entire response."
     }
   },
   "exceptions": {
