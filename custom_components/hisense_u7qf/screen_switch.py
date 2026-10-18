@@ -38,14 +38,15 @@ class HisenseU7QFAssumedAudioOnlySwitch(HisenseVidaaEntity, SwitchEntity):
 
     @property
     def is_on(self):
-        return self._assumed_audio_only
+        # The user opted into an assumption: default to screen on until a
+        # command establishes a value. Returning None makes HA show two buttons.
+        return self._assumed_audio_only is True
 
     @property
     def assumed_state(self):
-        # HA renders separate on/off buttons when this flag is true. Once a
-        # command establishes a value, expose a toggle while retaining the
-        # explicit state_source attribute (this is still not TV telemetry).
-        return self._assumed_audio_only is None
+        # This flag controls HA's two-button UI. Keep one toggle and describe
+        # the actual source of the assumption in extra_state_attributes.
+        return False
 
     @property
     def available(self):
@@ -54,7 +55,12 @@ class HisenseU7QFAssumedAudioOnlySwitch(HisenseVidaaEntity, SwitchEntity):
 
     @property
     def extra_state_attributes(self):
-        return {"state_source": "assumed_from_commands", "screen_state_reported_by_tv": False}
+        return {
+            "state_source": (
+                "assumed_screen_on" if self._assumed_audio_only is None else "assumed_from_commands"
+            ),
+            "screen_state_reported_by_tv": False,
+        }
 
     async def async_turn_on(self, **kwargs):
         if self._assumed_audio_only is True:

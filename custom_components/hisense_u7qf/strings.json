@@ -64,7 +64,7 @@
           "assume_screen_state": "Assume screen state"
         },
         "data_description": {
-          "assume_screen_state": "Replace the two screen buttons with an assumed Audio Only switch. Its state follows commands, not TV feedback; it is unknown after reconnecting."
+          "assume_screen_state": "Use one Audio Only toggle. State follows commands, not TV feedback. On startup, reconnect, input change, TV power-off or command failure, assume the screen is on (Audio Only off)."
         }
       }
     }

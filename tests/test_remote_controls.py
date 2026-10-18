@@ -167,8 +167,9 @@ class ScreenSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.switch.hass = SimpleNamespace(async_add_executor_job=execute)
 
     async def test_successful_commands_enable_toggle_in_both_positions(self):
-        self.assertIsNone(self.switch.is_on)
-        self.assertTrue(self.switch.assumed_state)
+        self.assertFalse(self.switch.is_on)
+        self.assertEqual(self.switch.extra_state_attributes["state_source"], "assumed_screen_on")
+        self.assertFalse(self.switch.assumed_state)
         await self.switch.async_turn_on()
         self.assertTrue(self.switch.is_on)
         self.assertFalse(self.switch.assumed_state)
@@ -182,29 +183,44 @@ class ScreenSwitchTests(unittest.IsolatedAsyncioTestCase):
     async def test_reconnect_discards_assumption(self):
         await self.switch.async_turn_on()
         self.switch._forget_state()
-        self.assertIsNone(self.switch.is_on)
-        self.assertTrue(self.switch.assumed_state)
+        self.assertFalse(self.switch.is_on)
+        self.assertEqual(self.switch.extra_state_attributes["state_source"], "assumed_screen_on")
+        self.assertFalse(self.switch.assumed_state)
 
     async def test_source_change_discards_assumption(self):
         await self.switch.async_turn_on()
         self.client.current_source = "HDMI2"
         self.switch._handle_state()
-        self.assertIsNone(self.switch.is_on)
-        self.assertTrue(self.switch.assumed_state)
+        self.assertFalse(self.switch.is_on)
+        self.assertEqual(self.switch.extra_state_attributes["state_source"], "assumed_screen_on")
+        self.assertFalse(self.switch.assumed_state)
 
     async def test_failed_action_discards_assumption(self):
         await self.switch.async_turn_on()
         self.client.screen_on.side_effect = ValueError("failed")
         with self.assertRaisesRegex(RuntimeError, "failed"):
             await self.switch.async_turn_off()
-        self.assertIsNone(self.switch.is_on)
-        self.assertTrue(self.switch.assumed_state)
+        self.assertFalse(self.switch.is_on)
+        self.assertEqual(self.switch.extra_state_attributes["state_source"], "assumed_screen_on")
+        self.assertFalse(self.switch.assumed_state)
 
     async def test_power_off_discards_assumption(self):
         await self.switch.async_turn_on()
         self.client.is_on = False
         self.switch._handle_state()
-        self.assertIsNone(self.switch.is_on)
+        self.assertFalse(self.switch.is_on)
+        self.assertEqual(self.switch.extra_state_attributes["state_source"], "assumed_screen_on")
+        self.assertFalse(self.switch.assumed_state)
+
+    async def test_disconnected_toggle_is_unavailable_and_sends_no_command(self):
+        self.client.connected = False
+        self.switch._forget_state()
+        self.assertFalse(self.switch.available)
+        self.assertFalse(self.switch.is_on)
+        self.assertFalse(self.switch.assumed_state)
+        with self.assertRaisesRegex(RuntimeError, "connection is not available"):
+            await self.switch.async_turn_off()
+        self.client.screen_on.assert_not_called()
 
 
 if __name__ == "__main__":
