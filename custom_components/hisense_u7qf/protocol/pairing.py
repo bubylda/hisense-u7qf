@@ -54,6 +54,7 @@ async def async_probe_pairing_challenge(client: Any, timeout: float = 8.0) -> bo
 
     client._auth_future = loop.create_future()
     client._pairing_event_future = loop.create_future()
+    keep_session = False
     try:
         client.mqtt_client = await loop.run_in_executor(
             None, client.create_mqtt_client, client.client_id, client.username, client.password
@@ -91,6 +92,7 @@ async def async_probe_pairing_challenge(client: Any, timeout: float = 8.0) -> bo
         next_trigger = 0.0  # publish the trigger immediately
         while loop.time() < deadline:
             if client._auth_future.done() and not client._auth_future.exception():
+                keep_session = True
                 return True
             if client._pairing_event_future.done():
                 raise PairingStatusError(client._pairing_event_future.result())
@@ -100,10 +102,17 @@ async def async_probe_pairing_challenge(client: Any, timeout: float = 8.0) -> bo
                 client.mqtt_client.publish(client.topicTVUIBasepath + "actions/gettvstate", "")
                 next_trigger = loop.time() + timeout / 2
             await asyncio.sleep(0.2)
+        keep_session = client.connected
         return False
+    except PairingStatusError:
+        # The config flow can retry PIN entry on the same live session.
+        keep_session = client.connected
+        raise
     finally:
         client._auth_future = None
         client._pairing_event_future = None
+        if not keep_session:
+            await loop.run_in_executor(None, client.disconnect)
 
 
 async def async_start_pairing_handshake(client: Any) -> None:

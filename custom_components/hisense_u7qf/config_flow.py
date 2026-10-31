@@ -20,7 +20,6 @@ from .const import (
 from .flow_certs import CertsFlowMixin
 from .flow_discovery import DiscoveryFlowMixin
 from .flow_helpers import (
-    async_disconnect_existing_client,
     async_discover_device_details,
     async_probe_device_capabilities,
     async_resolve_mac,
@@ -45,6 +44,7 @@ class HisenseVidaaConfigFlow(
     """Handle a config flow for Hisense VIDAA TV."""
 
     VERSION = 1
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         self.ip_address: str | None = None
@@ -85,14 +85,11 @@ class HisenseVidaaConfigFlow(
         """Probe TV capabilities (picture/sound menus) to set intelligent default options."""
         await async_probe_device_capabilities(self.hass, self.client, self.ip_address)
 
-    async def _async_disconnect_existing_client(self) -> None:
-        """Disconnect any running client for this IP/MAC to avoid MQTT session collision during pairing."""
-        # Only ever disconnect the entry being re-paired: a sibling entry that
-        # happens to share the IP/MAC must keep its client connected.
-        entry_id = self._reauth_entry.entry_id if self._reauth_entry else None
-        await async_disconnect_existing_client(
-            self.hass, self.ip_address, self.mac_address, entry_id=entry_id
-        )
+    async def _async_close_flow_client(self) -> None:
+        """Release only the temporary session owned by this flow."""
+        client, self.client = self.client, None
+        if client:
+            await self.hass.async_add_executor_job(client.disconnect)
 
     def _get_client_auth_data(self) -> dict[str, Any]:
         """Collect authentication credentials and device attributes dictionary."""
@@ -119,13 +116,14 @@ class HisenseVidaaConfigFlow(
         if not self.mac_address:
             self.mac_address = await async_resolve_mac(self.hass, self.ip_address)
 
-        # Duplicate/unique-id guard MUST run before touching the running client:
-        # its AbortFlow must not leave an existing (working) entry disconnected.
+        # Reject duplicate entries before opening another pairing session.
         if self.mac_address and self._reauth_entry is None:
             await self.async_set_unique_id(self.mac_address)
             self._abort_if_unique_id_configured()
 
-        await self._async_disconnect_existing_client()
+        # U7QFClient generates an independent MQTT session ID for pairing.
+        # Keep the loaded integration running even if this flow is cancelled.
+        await self._async_close_flow_client()
         self.client = HisenseTvClient(
             self.ip_address,
             self.mac_address,
@@ -136,9 +134,13 @@ class HisenseVidaaConfigFlow(
         )
         self.client._loop = self.hass.loop
 
-        await self.client.async_start_auth()
-
-        return await self._async_static_pairing_step(is_reauth, reauth_reason)
+        try:
+            await self.client.async_start_auth()
+            return await self._async_static_pairing_step(is_reauth, reauth_reason)
+        except BaseException:
+            # CancelledError also owns a session that must not outlive the flow.
+            await self._async_close_flow_client()
+            raise
 
     async def _async_static_pairing_step(
         self, is_reauth: bool, reauth_reason: str

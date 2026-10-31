@@ -30,6 +30,7 @@ class TokenLifecycleManager:
         self.last_refresh_attempt: float = 0.0
         self.token_watch: threading.Timer | None = None
         self.token_watch_closed: bool = False
+        self._token_watch_generation = 0
         self.awake_refresh_failures: int = 0
         self.last_awake_refresh_attempt: float = 0.0
         self.rejected_refresh_failures: int = 0
@@ -40,34 +41,51 @@ class TokenLifecycleManager:
     def start_token_watch(self) -> None:
         """Start the periodic token watch timer."""
         with self.refresh_lock:
-            # The latch is only meaningful for the current watch run: clear it so a
-            # stop (Force Reconnect / flow disconnect) does not permanently disable
-            # mid-session token renewal after the next reconnect.
-            self.token_watch_closed = False
             if self.token_watch is not None:
                 return
-            timer = threading.Timer(self.TOKEN_WATCH_INTERVAL, self._token_watch_tick)
-            timer.daemon = True
-            self.token_watch = timer
-            timer.start()
+            self.token_watch_closed = False
+            self._token_watch_generation += 1
+            self._schedule_token_watch_locked()
+
+    def _schedule_token_watch_locked(self) -> None:
+        """Schedule within refresh_lock, preserving the current watch generation."""
+        timer = threading.Timer(
+            self.TOKEN_WATCH_INTERVAL,
+            self._token_watch_tick,
+            args=(self._token_watch_generation,),
+        )
+        timer.daemon = True
+        self.token_watch = timer
+        timer.start()
 
     def stop_token_watch(self) -> None:
         """Stop the periodic token watch timer."""
         with self.refresh_lock:
             self.token_watch_closed = True
+            self._token_watch_generation += 1
             timer, self.token_watch = self.token_watch, None
         if timer:
             with contextlib.suppress(Exception):
                 timer.cancel()
 
-    def _token_watch_tick(self) -> None:
+    def _token_watch_tick(self, generation: int | None = None) -> None:
         with self.refresh_lock:
+            if generation is None:
+                generation = self._token_watch_generation
+            if self.token_watch_closed or generation != self._token_watch_generation:
+                return
             self.token_watch = None
         try:
             self.client._maybe_refresh_while_awake()
         except Exception as e:
             _LOGGER.debug("[%s] Token watch error: %s", self.client.ip, e)
-        self.start_token_watch()
+        with self.refresh_lock:
+            if (
+                not self.token_watch_closed
+                and generation == self._token_watch_generation
+                and self.token_watch is None
+            ):
+                self._schedule_token_watch_locked()
 
     def can_refresh_in_standby(self) -> bool:
         """Whether a token refresh may run while the TV is in standby (``refresh_in_standby`` option).

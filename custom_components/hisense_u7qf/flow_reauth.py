@@ -88,27 +88,8 @@ class ReauthFlowMixin:
         """Dialog to confirm reauth and trigger PIN."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            from .u7qf_client import U7QFClient as HisenseTvClient
-
-            # Disconnect any existing running client for this entry to prevent
-            # duplicate MQTT Client ID collisions during the reauth flow.
-            await self._async_disconnect_existing_client()
-
-            self.client = HisenseTvClient(
-                self.ip_address,
-                self.mac_address,
-                auth_profile=self.auth_profile,
-                certfile=self.certfile if self.use_ssl else None,
-                keyfile=self.keyfile if self.use_ssl else None,
-                use_ssl=self.use_ssl,
-            )
             try:
-                await self.client.async_start_auth()
-
-                if self.auth_profile in ("legacy", "static"):
-                    # The TV may demand a one-off PIN pairing.
-                    return await self._async_static_pairing_step(True, "reauth_successful")
-                return await self.async_step_auth()
+                return await self._async_init_client_and_auth(is_reauth=True)
             except AbortFlow:
                 # HA flow control must never be reported as cannot_connect.
                 raise

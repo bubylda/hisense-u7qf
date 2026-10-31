@@ -69,7 +69,9 @@ NAVIGATION_COMMANDS = {
 
 
 class HisenseVidaaNavigationButton(HisenseVidaaEntity, ButtonEntity):
-    """A single menu key exposed as a normal device control, not diagnostics."""
+    """An optional menu key, callable without cluttering automatic dashboards."""
+
+    _attr_entity_registry_visible_default = False
 
     def __init__(self, client: HisenseTvClient, entry: ConfigEntry, command: str) -> None:
         super().__init__(client, entry)
@@ -207,6 +209,8 @@ class HisenseVidaaTriggerReauthButton(HisenseVidaaBaseButton):
 
 class HisenseU7QFScreenButton(HisenseVidaaNavigationButton):
     """Action buttons: the firmware does not report an Audio Only switch state."""
+
+    _attr_entity_registry_visible_default = True
 
     def __init__(self, client, entry, off):
         super().__init__(client, entry, "exit")

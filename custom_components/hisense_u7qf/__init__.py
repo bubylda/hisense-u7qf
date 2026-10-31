@@ -41,6 +41,7 @@ from .const import (
     DEFAULT_USE_SSL,
     DOMAIN,
 )
+from .migration import async_migrate_entry as async_migrate_entry
 from .services import async_setup_services, async_unload_services
 from .u7qf_client import U7QFClient as HisenseTvClient
 
