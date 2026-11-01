@@ -4,6 +4,7 @@ import importlib
 from enum import IntFlag, auto
 from pathlib import Path
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -33,6 +34,9 @@ class Entity:
     assumed_state = False
 
     def schedule_update_ha_state(self):
+        pass
+
+    def async_write_ha_state(self):
         pass
 
 
@@ -142,6 +146,52 @@ class MediaPlayerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(jobs), 1)
         self.player._handle_state_update({"is_power_on": 1})
         self.assertEqual(len(jobs), 1)
+
+    async def test_both_power_entities_wait_for_same_live_feedback_after_turn_on(self):
+        sys.modules.update({
+            "homeassistant.components.remote": SimpleNamespace(RemoteEntity=type("RemoteEntity", (), {})),
+            "homeassistant.helpers": SimpleNamespace(entity_registry=SimpleNamespace()),
+        })
+        module = importlib.import_module(f"{PACKAGE}.remote")
+        callbacks = importlib.import_module(f"{PACKAGE}.tv.callbacks")
+        transitions = importlib.import_module(f"{PACKAGE}.tv.transitions")
+        self.client.__class__ = type("CallbackClient", (self.client.__class__, callbacks.CallbackRegistryMixin), {})
+        self.client._init_callbacks()
+        self.client._action_lock = threading.RLock()
+        self.client._pending_source = self.client._pending_power = None
+        self.client._transition_timers = []
+        self.client.power_confirmation_timeout = 30
+        self.client.mac = "00:11:22:33:44:55"
+        self.client.ip = "192.0.2.1"
+        self.client.topic_client_id = "hisenseservice"
+        self.client.send_wake_on_lan = lambda *args, **kwargs: True
+        remote = module.HisenseVidaaRemote(self.client, SimpleNamespace(
+            entry_id="tv", data={}, title="TV", options={},
+        ))
+        remote.hass = self.player.hass
+        publications = []
+        self.player.schedule_update_ha_state = lambda: publications.append(("media", self.player.state))
+        remote.schedule_update_ha_state = lambda: publications.append(("remote", remote.is_on))
+        self.client.register_state_callback(self.player._handle_state_update)
+        self.client.register_state_callback(remote._handle_state_update)
+
+        for entity in (self.player, remote):
+            with self.subTest(entity=type(entity).__name__):
+                self.client.state = "unknown"
+                self.client._power_state_live = False
+                self.client._state_query_sent = True
+                publications.clear()
+                self.sent.clear()
+                with patch.object(transitions.threading, "Timer"):
+                    await entity.async_turn_on()
+                self.assertEqual([item for item in self.sent if item[0].endswith("/gettvstate")], [
+                    ("/tv/ui/actions/gettvstate", "0"),
+                ])
+                self.assertIsNone(self.player.state)
+                self.assertIsNone(remote.is_on)
+                self.client._dispatch_state_update({"statetype": "sourceswitch", "sourcename": "HDMI3"})
+                self.assertEqual(publications, [("media", "on"), ("remote", True)])
+                self.assertIsNone(self.client._pending_power)
 
 
 if __name__ == "__main__":

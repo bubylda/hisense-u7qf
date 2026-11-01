@@ -62,7 +62,8 @@ class PowerStateTests(unittest.TestCase):
         self.client.mqtt_client = SimpleNamespace(publish=lambda topic, payload: sent.append((topic, payload)))
         self.client.topic_client_id = "hisenseservice"
         self.client.topicTVUIBasepath = "/remoteapp/tv/ui_service/hisenseservice/"
-        self.client.compatibility = SimpleNamespace(mqtt_trace=False, extended_discovery=False)
+        compatibility = importlib.import_module(f"{PACKAGE}.compatibility")
+        self.client.compatibility = compatibility.CompatibilityOptions()
         return sent
 
     def receive(self, suffix, data, retained=False, broadcast=False):
@@ -177,6 +178,36 @@ class PowerStateTests(unittest.TestCase):
                 with patch.object(self.actions.time, "sleep"):
                     self.actions.query_initial_state(self.client, min_interval=0)
                 self.assertFalse(any(item[0].endswith("/gettvstate") for item in sent))
+
+    def test_turn_on_refreshes_unknown_state_after_startup_probe_was_consumed(self):
+        sent = self.prepare_initial_query()
+        self.client._state_query_sent = True
+        self.client.mac = "00:11:22:33:44:55"
+        self.client.power_confirmation_timeout = 30
+        self.client._transition_timers = []
+        self.client.send_wake_on_lan = lambda *args, **kwargs: True
+        timer = SimpleNamespace(start=lambda: None)
+        with patch.object(self.connection.threading, "Timer", return_value=timer):
+            self.actions.turn_on_tv(self.client)
+        self.assertEqual([item for item in sent if item[0].endswith("/gettvstate")], [
+            ("/remoteapp/tv/ui_service/hisenseservice/actions/gettvstate", "0"),
+        ])
+        self.assertEqual(self.client.state, "unknown")
+        self.assertFalse(self.client._power_state_live)
+        self.receive("ui_service/state", {"statetype": "sourceswitch"}, broadcast=True)
+        self.assertEqual(self.client.state, "on")
+        self.assertIsNone(self.client._pending_power)
+
+    def test_repeated_turn_on_while_pending_can_read_state_without_repeating_wol(self):
+        sent = self.prepare_initial_query()
+        self.client._state_query_sent = True
+        self.client._pending_power = {"requested": "on", "outcome": "pending"}
+        # Any access to the WoL method here would be an erroneous second wake.
+        self.actions.turn_on_tv(self.client)
+        self.assertEqual(sent, [
+            ("/remoteapp/tv/ui_service/hisenseservice/actions/gettvstate", "0"),
+        ])
+        self.assertEqual(self.client.state, "unknown")
 
 
 if __name__ == "__main__":

@@ -34,6 +34,23 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
+def query_current_state(client: HisenseTvClient, *, allow_repeat: bool = False) -> None:
+    """Read unknown power using the verified U7QF route, without assigning it."""
+    with client._action_lock:
+        if (
+            not client.connected
+            or not client.mqtt_client
+            or getattr(client, "topic_client_id", None) != "hisenseservice"
+            or client.state != "unknown"
+            or (getattr(client, "_state_query_sent", False) and not allow_repeat)
+            or getattr(client, "_auth_future", None) is not None
+            or getattr(client, "_auth_code_future", None) is not None
+        ):
+            return
+        client._state_query_sent = True
+        client.mqtt_client.publish(client.topicTVUIBasepath + "actions/gettvstate", "0")
+
+
 def query_initial_state(client: HisenseTvClient, min_interval: float = 3.0) -> None:
     """Queries initial state, volume, source list, app list, and settings from TV."""
     if not (client.connected and client.mqtt_client):
@@ -54,15 +71,7 @@ def query_initial_state(client: HisenseTvClient, min_interval: float = 3.0) -> N
         # P0219/hisenseservice was verified on hardware: payload "0" elicits
         # a fresh broadcast state even when HDMI was active before HA started.
         # Do not use the empty pairing payload or repeat the probe in-session.
-        if (
-            getattr(client, "topic_client_id", None) == "hisenseservice"
-            and client.state == "unknown"
-            and not getattr(client, "_state_query_sent", False)
-            and getattr(client, "_auth_future", None) is None
-            and getattr(client, "_auth_code_future", None) is None
-        ):
-            client._state_query_sent = True
-            client.mqtt_client.publish(client.topicTVUIBasepath + "actions/gettvstate", "0")
+        query_current_state(client)
         client.mqtt_client.publish(client.topicTVUIBasepath + "actions/capability", "")
         time.sleep(0.05)
         client.mqtt_client.publish(client.topicTVPSBasepath + "actions/getvolume", "")
@@ -253,6 +262,9 @@ def turn_on_tv(
 ) -> None:
     """Powers on or wakes the TV safely and idempotently."""
     with client._action_lock:
+        # An unanswered startup probe must not leave an already awake TV
+        # unknown forever. Both HA power entities use this same read path.
+        query_current_state(client, allow_repeat=True)
         if client.is_on or client._pending_power:
             return
         pending = begin_transition(client, "power", "on", client.power_confirmation_timeout)
