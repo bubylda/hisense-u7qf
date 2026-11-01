@@ -290,7 +290,7 @@ class ActivityTests(ModuleTests):
             f"{PACKAGE}.entity": SimpleNamespace(HisenseVidaaEntity=type("Entity", (), {"__init__": lambda self, client, entry: self.__dict__.update(_client=client, _entry_id=entry.entry_id)})),
         })
         module = self.load("binary_sensor")
-        for connected, state, expected in [(True, "unknown", False), (True, "off", False), (True, "on", True), (False, "on", False), (True, "screensaver", True)]:
+        for connected, state, expected in [(True, "unknown", None), (True, "off", False), (True, "on", True), (False, "on", None), (True, "screensaver", True)]:
             with self.subTest(connected=connected, state=state):
                 client = SimpleNamespace(connected=connected, state=state, is_on=state in ("on", "screensaver", "fake_sleep_1"))
                 sensor = module.HisenseVidaaInUseBinarySensor(client, SimpleNamespace(entry_id="tv"))

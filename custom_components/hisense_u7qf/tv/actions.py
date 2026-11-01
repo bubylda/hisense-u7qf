@@ -51,10 +51,18 @@ def query_initial_state(client: HisenseTvClient, min_interval: float = 3.0) -> N
             return
         client._last_initial_query_time = now
 
-        # The TV already broadcasts its live state automatically on
-        # /remoteapp/mobile/broadcast/ui_service/state upon MQTT connect.
-        # Do NOT publish actions/gettvstate: on VIDAA firmware, gettvstate
-        # is the pairing challenge trigger that commands the TV to pop up a PIN.
+        # P0219/hisenseservice was verified on hardware: payload "0" elicits
+        # a fresh broadcast state even when HDMI was active before HA started.
+        # Do not use the empty pairing payload or repeat the probe in-session.
+        if (
+            getattr(client, "topic_client_id", None) == "hisenseservice"
+            and client.state == "unknown"
+            and not getattr(client, "_state_query_sent", False)
+            and getattr(client, "_auth_future", None) is None
+            and getattr(client, "_auth_code_future", None) is None
+        ):
+            client._state_query_sent = True
+            client.mqtt_client.publish(client.topicTVUIBasepath + "actions/gettvstate", "0")
         client.mqtt_client.publish(client.topicTVUIBasepath + "actions/capability", "")
         time.sleep(0.05)
         client.mqtt_client.publish(client.topicTVPSBasepath + "actions/getvolume", "")

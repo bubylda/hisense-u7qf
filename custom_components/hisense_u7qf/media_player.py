@@ -130,6 +130,7 @@ class HisenseVidaaMediaPlayer(HisenseVidaaEntity, MediaPlayerEntity):
         attrs: dict[str, Any] = {
             "mqtt_connected": self._client.connected,
             "auth_profile": self._client.auth_profile,
+            "power_state_source": getattr(self._client, "power_state_source", None),
         }
         if self._mac:
             attrs["mac_address"] = self._mac
@@ -345,22 +346,28 @@ class HisenseVidaaMediaPlayer(HisenseVidaaEntity, MediaPlayerEntity):
         statetype = parsed["statetype"]
 
         was_off = self._state == STATE_OFF
-        self._state = STATE_ON if parsed["is_on"] else STATE_OFF
+        self._state = STATE_ON if self._client.is_on else STATE_OFF
 
-        if parsed["is_on"] and statetype not in ("fake_sleep_0", "fake_sleep_1"):
+        if self._client.is_on and statetype not in ("fake_sleep_0", "fake_sleep_1"):
             if statetype in ("sourceswitch", "app", "livetv"):
                 self._source = parsed["source"]
                 self._connected_device = parsed["connected_device"]
                 self._channel_name = parsed["channel_name"]
                 self._channel_num = parsed["channel_num"]
-        elif not parsed["is_on"]:
+        elif not self._client.is_on:
             self._connected_device = None
             self._channel_name = None
             self._channel_num = None
 
         if (
-            parsed["is_on"]
-            and (was_off or not self._source_dict or not self._app_dict)
+            self._client.is_on
+            and (
+                was_off
+                or (
+                    statetype in ("sourceswitch", "app", "livetv")
+                    and (not self._source_dict or not self._app_dict)
+                )
+            )
             and self.hass
             and hasattr(self.hass, "loop")
             and self.hass.loop
@@ -390,7 +397,7 @@ class HisenseVidaaMediaPlayer(HisenseVidaaEntity, MediaPlayerEntity):
         self.schedule_update_ha_state()
 
     def _handle_connected(self) -> None:
-        # Power state is set by the retained state broadcast that follows the connect.
+        # Wait for live power telemetry; retained broadcasts may be stale.
         self._state = STATE_ON if (self._client and self._client.is_on) else STATE_OFF
         self.schedule_update_ha_state()
 

@@ -3,37 +3,34 @@
 from __future__ import annotations
 
 import contextlib
+import time
 from typing import Any
 
 from ..firmware_u4 import HDR_FLAG_ID, integer_value
 from ..picture_context import HDR_BUSINESS_ID, MODE_BUSINESS_ID, invalidate_picture, picture_context
 from .settings import find_menu_item_by_name, parse_settings_payload
 from .transitions import confirm_transitions
+from .power import parse_power_state
 
 
 def apply_state_update(client: Any, data: Any) -> None:
     """Updates client runtime state attributes from TV state payload."""
     if not isinstance(data, dict):
         return
+    if data.get("_retained", False):
+        return
     old_source = picture_context(client)[0]
     old_hdr = client.hdr_mode
 
     statetype = str(data.get("statetype", "")).lower()
-    if data.get("_retained", False):
-        client._power_state_live = False
-    elif statetype in (
-        "on",
-        "off",
-        "fake_sleep_0",
-        "fake_sleep_1",
-        "screen_saver",
-        "screensaver",
-        "remote_launcher",
-        "sourceswitch",
-        "app",
-        "livetv",
-    ) or ("is_power_on" in data and data["is_power_on"] in (0, 1, "0", "1")):
-        client._power_state_live = True
+    power = parse_power_state(data)
+    if power is not None:
+        client.state = power
+        client._power_state_live = power != "unknown"
+        client.power_state_source = data.get("_power_source") or (
+            "is_power_on" if "is_power_on" in data else "statetype"
+        )
+        client.power_state_observed_at = time.time()
     if "sourceid" in data or "sourcename" in data or statetype == "livetv":
         client._picture_active_app = None
         client.current_app = None
@@ -42,23 +39,6 @@ def apply_state_update(client: Any, data: Any) -> None:
         client._picture_active_app = "app:" + str(data.get("appid") or data.get("appname") or data.get("name") or data.get("url") or "unknown")
     elif statetype == "remote_launcher":
         client._picture_active_app = "home"
-    # Match fake_sleep_0 exactly: fake_sleep_1 means the TV is waking up (immediately
-    # followed by remote_launcher) and must be reported ON, not off.
-    if "off" in statetype or statetype == "fake_sleep_0":
-        client.state = "off"
-    elif statetype == "fake_sleep_1":
-        client.state = "fake_sleep_1"
-    elif data.get("is_power_on") in (0, "0", False) and "is_power_on" in data:
-        client.state = "off"
-    elif statetype in ("screen_saver", "screensaver"):
-        client.state = "screensaver"
-    elif statetype in ("on", "remote_launcher", "sourceswitch", "app", "livetv") or data.get("is_power_on") in (
-        1,
-        "1",
-        True,
-    ):
-        client.state = "on"
-
     if "sourcename" in data:
         client.current_source = data["sourcename"]
     elif "sourceid" in data:
@@ -234,6 +214,10 @@ class TvStateMixin:
         """Initializes all live state variables to clean defaults."""
         self._retained_screen_state: dict[str, Any] | None = None
         self._power_state_live: bool = False
+        self._state_query_sent: bool = False
+        self.power_state_source: str | None = None
+        self.power_state_observed_at: float | None = None
+        self.power_telemetry: dict[str, Any] = {}
         self._picture_active_app: str | None = None
         self.connected: bool = False
         self.state: str = "unknown"

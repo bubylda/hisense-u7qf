@@ -6,6 +6,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from ..tv.power import parse_power_state
+
 if TYPE_CHECKING:
     from ..client import HisenseTvClient
 
@@ -137,6 +139,8 @@ def dispatch_incoming_mqtt_message(client: HisenseTvClient, topic: str, payload:
             data = json.loads(payload)
             if isinstance(data, dict):
                 client._dispatch_device_info_update(data)
+                if parse_power_state(data) is not None:
+                    client._dispatch_state_update({**data, "_power_source": "capability"})
                 caps = str(data).lower()
                 if "notify" in caps or "toast" in caps or "showmessage" in caps or "message" in caps:
                     client.has_notifications = True
@@ -152,6 +156,9 @@ def dispatch_incoming_mqtt_message(client: HisenseTvClient, topic: str, payload:
         try:
             data = json.loads(payload)
             client._dispatch_device_info_update(data)
+            if parse_power_state(data) is not None:
+                source = "gettvinfo" if topic.endswith("/gettvinfo") else "getdeviceinfo"
+                client._dispatch_state_update({**data, "_power_source": source})
         except Exception as e:
             _LOGGER.debug("[%s] Error parsing device info payload: %s", ip, e)
         return

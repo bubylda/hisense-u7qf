@@ -16,6 +16,7 @@ import paho.mqtt.client as mqtt
 
 from .auth import apply_mqtt_tls
 from .dispatcher import dispatch_incoming_mqtt_message
+from ..tv.power import POWER_FIELDS
 
 if TYPE_CHECKING:
     from ..client import HisenseTvClient
@@ -179,6 +180,10 @@ class ConnectionManagerMixin:
         if rc == 0:
             self.state = "unknown"
             self._power_state_live = False
+            self._state_query_sent = False
+            self.power_state_source = None
+            self.power_state_observed_at = None
+            self.power_telemetry = {}
             self._retained_screen_state = None
             if self.picture_settings_version == "U4":
                 from ..picture_context import invalidate_picture
@@ -220,6 +225,9 @@ class ConnectionManagerMixin:
     def _on_disconnect(self: HisenseTvClient, client: mqtt.Client, userdata: Any, rc: int) -> None:
         self.connected = False
         self.state = "unknown"
+        self._power_state_live = False
+        self.power_state_source = None
+        self.power_state_observed_at = None
         self._last_initial_query_time = 0.0
         if self.picture_settings_version == "U4":
             from ..picture_context import invalidate_picture
@@ -236,13 +244,31 @@ class ConnectionManagerMixin:
         self._dispatch_disconnected()
 
     def _on_message(self: HisenseTvClient, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
+        power_topic = msg.topic in (
+            self.topicBrcsBasepath + "ui_service/state",
+            self.topicBrcsBasepath + "platform_service/actions/tvsleep",
+            self.topicMobiBasepath + "ui_service/data/state",
+            self.topicMobiBasepath + "ui_service/data/gettvstate",
+            self.topicMobiBasepath + "ui_service/data/capability",
+            self.topicMobiBasepath + "platform_service/data/gettvinfo",
+            self.topicMobiBasepath + "platform_service/data/getdeviceinfo",
+        )
+        if power_topic:
+            try:
+                data = json.loads(msg.payload)
+            except (ValueError, TypeError):
+                data = None
+            if isinstance(data, dict):
+                self.power_telemetry[msg.topic.rsplit("/", 1)[-1]] = {
+                    "received_at": time.time(),
+                    "retained": getattr(msg, "retain", False) is True,
+                    "fields": {key: data[key] for key in POWER_FIELDS if key in data},
+                }
         if self.compatibility.mqtt_trace:
             self.trace.record(
                 "RX", msg.topic, msg.payload, getattr(msg, "qos", 0), getattr(msg, "retain", False) is True
             )
-        if getattr(msg, "retain", False) is True and (
-            msg.topic.endswith("/state") or msg.topic.endswith("/gettvstate") or msg.topic.endswith("/tvsleep")
-        ):
+        if power_topic and getattr(msg, "retain", False) is True:
             try:
                 data = json.loads(msg.payload)
                 if isinstance(data, dict):
@@ -250,22 +276,6 @@ class ConnectionManagerMixin:
             except (ValueError, TypeError):
                 pass
             return
-        if (
-            msg.topic == self.topicMobiBasepath + "ui_service/data/sourcelist"
-            and getattr(msg, "retain", False) is not True
-            and self._retained_screen_state
-            and not self._power_state_live
-        ):
-            try:
-                sources = json.loads(msg.payload)
-                if isinstance(sources, dict):
-                    sources = sources.get("sourcelist")
-                if isinstance(sources, list) and sources:
-                    # The service replied to a fresh query. Snapshot is useful
-                    # for source selection, never for power-toggle authorization.
-                    self._dispatch_state_update({**self._retained_screen_state, "_retained": True})
-            except (ValueError, TypeError):
-                pass
         payload = msg.payload.decode("utf-8", errors="ignore")
         dispatch_incoming_mqtt_message(self, topic=msg.topic, payload=payload)
 
@@ -361,6 +371,9 @@ class ConnectionManagerMixin:
         self._pending_power = None
         self._pending_source = None
         self.state = "unknown"
+        self._power_state_live = False
+        self.power_state_source = None
+        self.power_state_observed_at = None
         self._token_manager.stop_token_watch()
         self._token_manager.cancel_rejected_retry()
         timer, self._query_timer = self._query_timer, None

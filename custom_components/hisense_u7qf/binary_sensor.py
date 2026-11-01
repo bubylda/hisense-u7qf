@@ -90,8 +90,10 @@ class HisenseVidaaInUseBinarySensor(HisenseVidaaEntity, BinarySensorEntity):
         self._attr_unique_id = f"{self._entry_id}_in_use"
 
     @property
-    def is_on(self) -> bool:
+    def is_on(self) -> bool | None:
         """Return True when TV is active and not in standby."""
+        if not self._client or not self._client.connected or self._client.state == "unknown":
+            return None
         return bool(self._client and self._client.connected and self._client.is_on)
 
     @property
